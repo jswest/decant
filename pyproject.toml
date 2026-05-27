@@ -2,6 +2,7 @@
 name = "decant"
 version = "0.1.0"
 description = "Pour the clear liquid off; leave the sediment behind. URL -> clean markdown + optional local-LLM findings."
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "John West" }]
