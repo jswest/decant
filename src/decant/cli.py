@@ -38,6 +38,7 @@ from decant.search import (
     SearchUnavailableError,
     search,
 )
+from decant.soft_404 import detect as detect_soft_404
 from decant.ua import build_user_agent
 
 
@@ -482,12 +483,20 @@ async def _process_one(
     if mode in ("extract", "both"):
         extract_block["markdown"] = markdown
 
+    soft_404_meta = detect_soft_404(
+        final_url=fetched.final_url,
+        html=fetched.html,
+        markdown=markdown,
+        title=fetched.title,
+    )
+
     meta: dict = {
         "playwright_ms": fetched.elapsed_ms,
         "extract_ms": extract_ms,
         "cached": False,
         "robots_checked": True,
         "model": model,
+        "soft_404": soft_404_meta,
     }
     if ollama_ms is not None:
         meta["ollama_ms"] = ollama_ms
