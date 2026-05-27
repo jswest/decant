@@ -25,7 +25,7 @@ The shape of the tradeoff: decant trades 4–6× more wall-clock for 25–75% of
 
 ## Install
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running Ollama instance for summary mode.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running Ollama instance for summary mode and a [Brave Search API](https://api.search.brave.com/) key for `decant search` (free tier covers light use; paid tier is $5/1k requests).
 
 ```bash
 git clone https://github.com/<you>/decant && cd decant
@@ -59,13 +59,7 @@ uv tool install .                  # or: uv tool install --editable .
 
 `uv run decant` only resolves inside this project directory; `uv tool install` makes `decant` available globally.
 
-**Re-copy after every `git pull`.** Pre-1.0, the skill contract changes often — flags rename, output shapes shift, new modes land. Your harness reads the skill from where you copied it, not from this repo. After every pull, overwrite the installed copy:
-
-```bash
-cp skills/decant.md ~/.claude/skills/decant.md
-```
-
-The CLI itself resolves through the installed package, so the same `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync with the contract the skill describes.
+**Re-copy after every `git pull`** — the skill contract changes pre-1.0. The CLI resolves through the installed package, so `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync.
 
 ## Usage
 
@@ -148,7 +142,7 @@ Returns the markdown *and* the summary in one response.
 uv run decant url https://a.com https://b.com https://c.com
 ```
 
-URLs are fetched sequentially (no parallelism — see [polite scraping](#polite-scraping-policy)). The output is a JSON array in the same order as the arguments. In batch mode a summary line is printed to stderr (`2 succeeded, 1 failed (run completed in 3.4s)`), and the exit code follows this table:
+URLs are fetched sequentially (no parallelism — see [project notes](#project-notes)). The output is a JSON array in the same order as the arguments. In batch mode a summary line is printed to stderr (`2 succeeded, 1 failed (run completed in 3.4s)`), and the exit code follows this table:
 
 | Scenario | Default | With `--allow-partial` |
 | --- | --- | --- |
@@ -230,38 +224,15 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 
 ### Fast vs. accurate model tiers
 
-`decant` knows two model slots: `ollama.model` (the accurate slot) and `ollama.fast_model` (optional, smaller/cheaper). The intended pattern is "fast is the default; reach for accurate when it matters." The benchmark in `docs/extraction-benchmark.md` showed the fast tier within ~5 points of recall and ~30% faster on typical pages, so the default favors the cheap path.
-
-Resolution order, per call:
-
-1. `--model X` → use `X` (`meta.tier == "explicit"`).
-2. `--fast` and `fast_model` set → use `fast_model` (`meta.tier == "fast"`).
-3. `--fast` and `fast_model` unset → exits non-zero with `config_missing_fast_model`.
-4. `--accurate` → use `ollama.model` (`meta.tier == "accurate"`).
-5. Otherwise, if `fast_model` is set → use `fast_model` (`meta.tier == "fast"`). **(Default when a fast model is configured.)**
-6. Otherwise → use `ollama.model` (`meta.tier == "accurate"`).
-
-`--fast` and `--accurate` are mutually exclusive. `meta.tier` is reported on `summary` and `both` responses alongside `meta.model`, so callers can pattern-match without parsing the model string. Extract mode doesn't call Ollama, so `tier` is omitted there.
-
-Configure the fast model interactively (`decant config` will prompt for it) or by editing `~/.decant/config.yaml` directly.
-
-#### Migration note — default flip (issue #23)
-
-Before issue #23, summary mode always defaulted to `ollama.model` regardless of whether `fast_model` was configured. The default has been flipped: if `fast_model` is set, summary mode now uses it by default, and `--accurate` is the new opt-in to `ollama.model`. **This is a breaking default for users with `fast_model` configured.** If you want the old behavior, pass `--accurate` on every call, or remove `fast_model` from your config. Users without `fast_model` configured see no change. `meta.tier` already exists for callers that want to detect at runtime which tier was used.
+`decant` knows two model slots: `ollama.model` (accurate) and `ollama.fast_model` (optional, smaller). Default is `fast_model` when set, else `ollama.model`. `--accurate`, `--fast`, and `--model X` override in that priority. `meta.tier` reports which slot ran. The benchmark in `docs/extraction-benchmark.md` shows fast within ~5 points of recall and ~30% faster on typical pages. See [SPEC.md](./SPEC.md) for the full resolution table.
 
 ### Terse summary mode
-
-The summary mode's `findings[].quote` blocks make the answer auditable — the calling agent can show the user exactly where on the page each claim came from. They're also the biggest single contributor to summary-mode tokens. Pass `--terse` when the caller only needs the answer:
 
 ```bash
 uv run decant url https://example.com/article --question "What is X?" --terse
 ```
 
-The response keeps `answer`, `page_topic`, and `findings[]`, but each finding now carries only `context` and `relevance` — no verbatim text. `meta.terse: true` is set so downstream callers can detect it. The same flag is honored on `--mode both`.
-
-`--terse` plus `--fast` is the lean-and-cheap orchestrator setting; the inverse (`--accurate`, no `--terse`) is the audit/legal setting. `--terse` is rejected with `--mode extract` (extract mode doesn't call the LLM, so there's nothing to be terse about).
-
-Terse and full responses cache as separate entries, so toggling the flag never serves stale cross-mode output.
+Each finding keeps `context` and `relevance` but drops the verbatim `quote`. `meta.terse: true` confirms it. Lean-and-cheap; less auditable. Rejected with `--mode extract`.
 
 ### Soft-404 detection
 
@@ -284,12 +255,7 @@ uv run decant cache stats     # {"entries": N, "total_bytes": M, "oldest": ..., 
 uv run decant cache clear     # {"cleared": N, "freed_bytes": M}
 ```
 
-The cache key depends on the mode:
-
-- **Summary / both:** `sha256(url + mode + question + model)` — different questions or models get separate entries. A `|terse` suffix is appended when `--terse` is set, so terse and full responses don't collide.
-- **Extract:** `sha256(url + "extract")` — question, model, and terse-ness are all ignored, since the extracted markdown depends on none of them.
-
-Running `--mode both` writes **three** entries — the full `both` payload plus single-mode projections — so a follow-up `--mode extract` or `--mode summary` against the same URL hits cache instead of refetching. TTL is configurable; default is 24 hours, enforced via file mtime.
+Different question/model/terse settings get separate entries; toggling them never returns stale results. `--mode both` writes the full payload plus single-mode projections so follow-up `extract`/`summary` calls hit cache. TTL defaults to 24 hours. See [SPEC.md](./SPEC.md) for the cache-key formula.
 
 ### Version
 
@@ -334,76 +300,17 @@ search:
 
 The User-Agent is not configurable. It is built from `contact_email` and the package version: `Decant/<version> (+mailto:<contact_email>)`.
 
-## Pipeline
+## Project notes
 
-For each URL:
+**Polite scraping policy** (non-negotiable, hardcoded):
 
-1. **Validate** the URL parses and uses an `http`/`https` scheme.
-2. **Cache lookup** (unless `--no-cache`). A hit short-circuits the rest.
-3. **robots.txt** — fetched once per host per run with our User-Agent. Parsed with [`protego`](https://github.com/scrapy/protego). Disallow is fatal for that URL.
-4. **Fetch** via headless Chromium (Playwright). Image/font/media requests are aborted at the route handler. One browser context is reused across all URLs in a batch. After the page settles, [Mozilla Readability.js](https://github.com/mozilla/readability) (vendored, runs in-browser) parses the DOM into an article dict that's the preferred input to the extractor chain. `bypass_csp=True` lets the helper script load on CSP-strict pages.
-5. **Extract** with a three-tier fallback chain. Tiers 1 and 2 gate on a 250-char length floor; tier 3 only needs non-empty output:
-   1. **Mozilla Readability.js** — `markdownify(article["content"])` when the Fetcher captured a parsed article
-   2. `trafilatura` → markdown
-   3. BeautifulSoup (`main` → `article` → `[role=main]` → `body`, with script/style/nav/footer/aside stripped) → `html2text`
-6. **Distill** (only for `summary` or `both`). Markdown is sent to Ollama's `/api/chat` with the result schema passed as the `format` parameter so generation is constrained at decode time. The response is validated against the same Pydantic model. One retry on validation failure.
-7. **Compose** the result JSON per the schema above.
-8. **Cache write** (unless `--no-cache`).
-
-Markdown longer than 80 000 characters is truncated before being sent to Ollama (`meta.truncated: true` flags this).
-
-## Error codes
-
-Errors print as JSON on stdout with a non-zero exit code:
-
-```json
-{
-  "url": "https://example.com/article",
-  "error": "Robots.txt disallows User-Agent 'Decant/0.1 (+mailto:...)' for path '/article'.",
-  "code": "robots_disallowed",
-  "details": { "robots_url": "https://example.com/robots.txt" }
-}
-```
-
-The closed set of codes:
-
-| Code | Meaning |
-| --- | --- |
-| `invalid_url` | URL did not parse or has an unsupported scheme. |
-| `robots_disallowed` | robots.txt forbids our UA on this path. |
-| `fetch_failed` | Playwright threw (timeout, DNS, refused, 4xx/5xx). |
-| `extract_empty` | All three extractors returned empty. |
-| `ollama_unavailable` | Could not reach the configured Ollama host. |
-| `ollama_timeout` | `/api/chat` exceeded `ollama.request_timeout_s`. |
-| `ollama_bad_json` | Model returned non-JSON or off-schema JSON after one retry. |
-| `config_missing` | No `~/.decant/config.yaml` — run `decant config`. |
-| `config_missing_fast_model` | `--fast` was passed but `ollama.fast_model` is unset. Set it via `decant config` or pass `--model X` explicitly. |
-| `search_no_api_key` | `decant search` ran without a Brave key configured. |
-| `search_unauthorized` | Brave returned 401/403. Check the API key. |
-| `search_rate_limited` | Brave returned 429. `details.retry_after` carries seconds if Brave provided it. |
-| `search_unavailable` | Network failure, timeout, 5xx, or other Brave error. |
-| `search_bad_query` | Query failed length/word-count validation, or Brave returned 400/422. |
-
-Progress messages (e.g. `Fetching https://...` under `--verbose`) go to stderr.
-
-## Polite scraping policy
-
-Non-negotiable, hardcoded:
-
-- **User-Agent** identifies itself honestly and includes a contact email: `Decant/<version> (+mailto:<contact_email>)`. `decant url` refuses to run without one set.
-- **robots.txt** is checked once per host per run. A disallow for our UA is fatal — there is **no** `--ignore-robots` flag. Callers who need to bypass should use their own browser.
+- **User-Agent** identifies itself honestly with a contact email: `Decant/<version> (+mailto:<contact_email>)`. `decant url` refuses to run without one set.
+- **robots.txt** is checked once per host per run. A disallow for our UA is fatal — there is **no** `--ignore-robots` flag.
 - **Sequential fetches.** One URL at a time. No concurrency.
-- **No retries on 4xx** other than 429. A single retry on 5xx and 429 with 2-second backoff.
+- **No retries on 4xx** other than 429. Single retry on 5xx/429 with 2-second backoff.
 - **No cookies persisted across runs.** Each invocation gets a fresh browser context.
 
-## Non-goals
-
-- **Search.** Decant does not search the web. Callers provide URLs.
-- **Crawling.** Decant fetches the URLs it is given. It does not follow links beyond ordinary HTTP redirects.
-- **Backwards compatibility with itself.** Pre-1.0: breaking changes to config/cache/output are allowed. Bump the version and clear `~/.decant/cache/`.
-- **JS execution sandboxing tricks.** Playwright is always on.
-
-## Development
+**Development**:
 
 ```bash
 uv sync --extra dev
@@ -411,7 +318,7 @@ uv run pytest -q                              # ~70 tests, ~0.3s
 DECANT_E2E=1 uv run pytest tests/test_fetch.py # adds the real-browser test
 ```
 
-The implementation lives under `src/decant/`. Module roles are documented in [SPEC.md](./SPEC.md), which is the design-of-record and slightly more detailed than this README.
+Implementation under `src/decant/`. Pipeline, error codes, and module roles are documented in [SPEC.md](./SPEC.md), the design-of-record.
 
 ## License
 
