@@ -52,8 +52,11 @@ def stub_pipeline(monkeypatch):
 
     monkeypatch.setattr("decant.cli.Fetcher", StubFetcher)
     monkeypatch.setattr("decant.cli.RobotsCache", lambda: StubRobots())
+    # Markdown is intentionally >200 chars so the soft-404 short-extract signal
+    # doesn't trip in unrelated happy-path tests.
+    stub_md = "# Title\n\n" + ("body " * 60)
     monkeypatch.setattr(
-        "decant.cli.extract_html", lambda html: ("# Title\n\nbody", "trafilatura")
+        "decant.cli.extract_html", lambda html: (stub_md, "trafilatura")
     )
     distill_mock = AsyncMock(
         return_value=(
@@ -84,6 +87,7 @@ def test_extract_mode_default_no_question(patched_paths, stub_pipeline):
     assert "markdown" in payload["extract"]
     assert "summary" not in payload
     assert "ollama_ms" not in payload["meta"]
+    assert payload["meta"]["soft_404"]["verdict"] == "unlikely"
 
 
 def test_summary_mode_default_with_question(patched_paths, stub_pipeline):
@@ -126,6 +130,36 @@ def test_multiple_urls_emit_array_in_order(patched_paths, stub_pipeline):
     payload = json.loads(result.output)
     assert isinstance(payload, list)
     assert [p["url"] for p in payload] == ["https://a.com", "https://b.com"]
+
+
+def test_soft_404_likely_via_title(patched_paths, stub_pipeline, monkeypatch):
+    """End-to-end: a fetched page with a 404-ish title surfaces verdict=likely."""
+
+    class StubFetcher:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def fetch(self, url, **_):
+            return FetchResult(
+                final_url=url,
+                title="404 — page not found",
+                html="<html><head><title>404</title></head><body></body></html>",
+                elapsed_ms=10,
+            )
+
+    monkeypatch.setattr("decant.cli.Fetcher", StubFetcher)
+
+    result = CliRunner().invoke(main, ["url", "https://example.com/missing"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["soft_404"]["verdict"] == "likely"
+    assert "title_contains_404" in payload["meta"]["soft_404"]["reasons"]
 
 
 def test_exit_nonzero_when_any_url_errors(patched_paths, stub_pipeline):
