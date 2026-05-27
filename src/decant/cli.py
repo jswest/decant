@@ -460,7 +460,7 @@ async def _process_one(
     # 5. Extract.
     extract_start = time.monotonic()
     try:
-        markdown, extractor_name = extract_html(fetched.html)
+        markdown, extractor_name = extract_html(fetched.html, fetched.article)
     except ExtractEmptyError as e:
         return _error(url, ErrorCode.EXTRACT_EMPTY, str(e))
     extract_ms = int((time.monotonic() - extract_start) * 1000)
