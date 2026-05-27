@@ -6,6 +6,23 @@
 
 It exists to save context tokens for hosted coding agents (Claude Code, Cursor, etc.) that would otherwise burn 10k–50k tokens fetching a full web page. The heavy work — browser rendering, content extraction, summarization — stays on your own machine.
 
+## How it compares to WebSearch
+
+The closest alternative for most agents is the built-in `WebSearch` tool. Indexed against WebSearch on a 5-URL corpus (full methodology and per-URL scores in [`docs/REPORT-extraction-results-3.md`](./docs/REPORT-extraction-results-3.md)):
+
+| Retriever | Tokens | Recall | Time |
+|---|---:|---:|---:|
+| `decant url` (extract mode) | 3717% | 92% | 33% |
+| **WebSearch (baseline)** | **100%** | **100%** | **100%** |
+| `decant url --question` (fast) | 75% | 93% | 533% |
+| `decant url --question --accurate` | 51% | 86% | 617% |
+| `decant url --question --terse` | 25% | 75% | 367% |
+| `decant url --question --accurate --terse` | 23% | 76% | 467% |
+
+Lower is better for tokens and time; higher is better for recall. WebSearch wall-clock is a subjective ~6s for a parallel batch — treat the time column as order-of-magnitude.
+
+The shape of the tradeoff: decant trades 4–6× more wall-clock for 25–75% of WebSearch's token cost, with recall within ±15 points of WebSearch depending on mode. WebSearch's recall also drifts run-to-run as its index changes (REPORT-2 had it at 73% vs 100% baseline here), so the recall column is the noisiest signal.
+
 ## Install
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running Ollama instance for summary mode.
