@@ -9,17 +9,26 @@ from pathlib import Path
 from decant.config import CACHE_DIR
 
 
-def cache_key(url: str, mode: str, question: str | None, model: str) -> str:
+def cache_key(
+    url: str,
+    mode: str,
+    question: str | None,
+    model: str,
+    terse: bool = False,
+) -> str:
     """Compute a cache key.
 
-    Extract-mode keys ignore `question` and `model` — the extracted markdown
-    depends on neither. Summary/both keys include both, since the LLM output
-    is question- and model-dependent.
+    Extract-mode keys ignore `question`, `model`, and `terse` — the extracted
+    markdown depends on none of them. Summary/both keys include `question` and
+    `model`; `terse=True` appends a `|terse` suffix so terse and full responses
+    don't collide. Non-terse summary/both keys keep their pre-`--terse`
+    byte-identical shape so existing user caches survive the upgrade.
     """
     if mode == "extract":
         raw = f"{url}|extract"
     else:
-        raw = f"{url}|{mode}|{question or ''}|{model}"
+        suffix = "|terse" if terse else ""
+        raw = f"{url}|{mode}|{question or ''}|{model}{suffix}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

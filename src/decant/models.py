@@ -33,6 +33,17 @@ class DistillResult(BaseModel):
     findings: list[Finding] = Field(..., max_length=8)
 
 
+class TerseFinding(BaseModel):
+    context: str
+    relevance: Literal["high", "medium", "low"]
+
+
+class TerseDistillResult(BaseModel):
+    answer: str | None
+    page_topic: str
+    findings: list[TerseFinding] = Field(..., max_length=8)
+
+
 class SearchResult(BaseModel):
     url: str
     title: str

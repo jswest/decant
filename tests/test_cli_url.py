@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 from click.testing import CliRunner
 
 from decant.cli import main
 from decant.fetch import FetchResult
-from decant.models import DistillResult
+from decant.models import DistillResult, TerseDistillResult
 
 
 @pytest.fixture
@@ -67,15 +66,12 @@ def stub_pipeline(monkeypatch):
         "decant.cli.extract_html",
         lambda html, article=None: (stub_md, "trafilatura"),
     )
-    distill_mock = AsyncMock(
-        return_value=(
-            DistillResult(answer="Y.", page_topic="topic", findings=[]),
-            42,
-            False,
-        )
-    )
-    monkeypatch.setattr("decant.cli.distill", distill_mock)
-    return distill_mock
+    async def fake_distill(*args, terse: bool = False, **kwargs):
+        result_cls = TerseDistillResult if terse else DistillResult
+        return result_cls(answer="Y.", page_topic="topic", findings=[]), 42, False
+
+    monkeypatch.setattr("decant.cli.distill", fake_distill)
+    return fake_distill
 
 
 # ---------------------------------------------------------------------------
@@ -526,4 +522,127 @@ def test_mode_both_warm_extract_projection_omits_tier(
     assert p2["mode"] == "extract"
     assert p2["meta"]["cached"] is True
     assert "tier" not in p2["meta"]
+
+
+# --- --terse plumbing ------------------------------------------------------
+
+
+def test_summary_default_is_not_terse(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "what?"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["terse"] is False
+
+
+def test_terse_flag_sets_meta_terse(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "what?", "--terse"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["terse"] is True
+
+
+def test_terse_findings_have_no_quote_field(patched_paths, stub_pipeline, monkeypatch):
+    """A terse-mode call's findings must not carry `quote`."""
+    from decant.models import TerseDistillResult, TerseFinding
+
+    async def fake_distill(*args, terse: bool = False, **kwargs):
+        assert terse is True
+        return (
+            TerseDistillResult(
+                answer="A.",
+                page_topic="t",
+                findings=[TerseFinding(context="C", relevance="high")],
+            ),
+            10,
+            False,
+        )
+
+    monkeypatch.setattr("decant.cli.distill", fake_distill)
+
+    result = CliRunner().invoke(
+        main, ["url", "https://x.com", "--question", "Q?", "--terse"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["summary"]["findings"] == [{"context": "C", "relevance": "high"}]
+
+
+def test_terse_with_mode_extract_errors(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--mode", "extract", "--terse"]
+    )
+    assert result.exit_code != 0
+    assert "--terse requires" in result.output
+
+
+def test_extract_mode_omits_terse_in_meta(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(main, ["url", "https://example.com"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "terse" not in payload["meta"]
+
+
+def test_terse_and_full_cache_are_isolated(patched_paths, stub_pipeline):
+    """Same URL + question + model with vs without --terse must keep separate
+    cache entries: neither call should serve the other."""
+    url = "https://terse-iso.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(main, ["url", url, "--question", "Q?"])
+    assert r1.exit_code == 0, r1.output
+    assert json.loads(r1.output)["meta"]["cached"] is False
+
+    r2 = runner.invoke(main, ["url", url, "--question", "Q?", "--terse"])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["meta"]["cached"] is False
+    assert p2["meta"]["terse"] is True
+
+    r3 = runner.invoke(main, ["url", url, "--question", "Q?"])
+    assert r3.exit_code == 0, r3.output
+    p3 = json.loads(r3.output)
+    assert p3["meta"]["cached"] is True
+    assert p3["meta"]["terse"] is False
+
+
+def test_mode_both_warms_terse_summary_cache(patched_paths, stub_pipeline):
+    """--mode both --terse should warm the summary cache for the same terse query."""
+    url = "https://terse-both.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(
+        main, ["url", url, "--question", "Q?", "--mode", "both", "--terse"]
+    )
+    assert r1.exit_code == 0, r1.output
+
+    r2 = runner.invoke(main, ["url", url, "--question", "Q?", "--terse"])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["meta"]["cached"] is True
+    assert p2["meta"]["terse"] is True
+
+
+def test_both_mode_warm_extract_projection_omits_terse(
+    patched_paths, stub_pipeline
+):
+    """The extract-mode cache projection from --mode both --terse must drop
+    `terse` from meta, matching what a fresh extract-only run would emit."""
+    url = "https://terse-extract-projection.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(
+        main, ["url", url, "--question", "Q?", "--mode", "both", "--terse"]
+    )
+    assert r1.exit_code == 0, r1.output
+
+    r2 = runner.invoke(main, ["url", url])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["mode"] == "extract"
+    assert p2["meta"]["cached"] is True
+    assert "terse" not in p2["meta"]
 
