@@ -86,3 +86,37 @@ def test_config_persists_fast_model_when_provided(patched_paths, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "fast_model: qwen3:8b" in cfg_path.read_text()
+
+
+def test_config_announces_fast_default_when_fast_model_set(
+    patched_paths, monkeypatch
+):
+    """Issue #23: callers configuring fast_model should learn that summary mode
+    now defaults to the fast tier, with --accurate as the opt-in for the
+    previous behavior."""
+    monkeypatch.setattr(
+        "decant.cli._list_ollama_models", lambda host: ["qwen3:32b", "qwen3:8b"]
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\nqwen3:8b\n24\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "default to the fast tier" in result.output
+    assert "--accurate" in result.output
+
+
+def test_config_no_fast_default_note_when_fast_model_unset(
+    patched_paths, monkeypatch
+):
+    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+
+    result = CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "default to the fast tier" not in result.output

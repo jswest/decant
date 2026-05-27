@@ -32,7 +32,7 @@ Prompts:
 1. **Contact email** (required) — embedded in the User-Agent string so site operators can reach you. No default. Validated as a plausible email.
 2. **Ollama host** (default `http://localhost:11434`).
 3. **Ollama model** (default: first model returned by `ollama list`, else prompts blindly). Validated by hitting `/api/tags` on the host.
-4. **Fast Ollama model** (optional, skip with blank input). Stored under `ollama.fast_model`. Enables the `--fast` flag on `decant url`. Same `/api/tags` listing as the main model prompt.
+4. **Fast Ollama model** (optional, skip with blank input). Stored under `ollama.fast_model`. When set, becomes the default tier for `decant url --question` (with `--accurate` as the opt-out). Also enables the explicit `--fast` flag. Same `/api/tags` listing as the main model prompt.
 5. **Cache TTL hours** (default `24`).
 6. **Brave Search API key** (optional, skip with blank input). Hidden input. Stored under `search.brave_api_key`. The `BRAVE_SEARCH_API_KEY` env var, if set, overrides the file value at load time.
 
@@ -49,7 +49,8 @@ Flags:
   - `summary`: returns structured findings from Ollama; omits the raw markdown.
   - `both`: returns markdown **and** Ollama findings.
 - `--model MODEL` — override the configured Ollama model for this run.
-- `--fast` — use `ollama.fast_model` instead of the default. Ignored when `--model` is also passed (explicit wins). Errors with `config_missing_fast_model` if no `fast_model` is configured.
+- `--fast` — use `ollama.fast_model`. Already the default when `fast_model` is configured (see resolution table); useful for scripts that want to be explicit. Ignored when `--model` is also passed. Errors with `config_missing_fast_model` if no `fast_model` is configured.
+- `--accurate` — use `ollama.model` (the accurate tier). Opt-in for cases where the extra latency pays off (legal/compliance, very large pages, audit work). Ignored when `--model` is also passed. Mutually exclusive with `--fast`.
 - `--no-cache` — bypass cache for both read and write on this run.
 - `--timeout SECONDS` — per-URL hard ceiling (default 60s for fetch, 300s for Ollama).
 
@@ -58,9 +59,13 @@ Flags:
 1. `--model X` → use `X`, `meta.tier == "explicit"`.
 2. `--fast` and `ollama.fast_model` set → use `fast_model`, `meta.tier == "fast"`.
 3. `--fast` and `ollama.fast_model` unset → `config_missing_fast_model` error.
-4. Otherwise → use `ollama.model`, `meta.tier == "accurate"`.
+4. `--accurate` → use `ollama.model`, `meta.tier == "accurate"`.
+5. Otherwise, if `ollama.fast_model` is set → use `fast_model`, `meta.tier == "fast"`. **(Default when a fast model is configured — see changelog below.)**
+6. Otherwise → use `ollama.model`, `meta.tier == "accurate"`.
 
 `meta.tier` is reported on `summary`/`both` responses (alongside `meta.model`). Extract mode doesn't call Ollama, so `tier` is omitted there.
+
+**Changelog — default tier flip (issue #23).** Prior to this change, summary mode defaulted to `ollama.model` (the accurate tier) regardless of whether `fast_model` was configured. The extraction benchmark (corpus v1) showed recall within 5 points across the two tiers and ~30% lower wall-clock latency on the fast tier for typical pages, so the default flipped: if `ollama.fast_model` is configured, summary mode now uses it by default. Pass `--accurate` to opt back into `ollama.model`. Users without `fast_model` configured see no change. The flip only affects `meta.tier` and `meta.model` going forward; the cache key already includes the resolved model, so existing accurate-tier cache entries are unaffected (just become unreachable until a `--accurate` run repopulates them).
 
 Output:
 - Single URL → one JSON object on stdout.
@@ -136,7 +141,7 @@ contact_email: john@example.com         # required, embedded in User-Agent
 ollama:
   host: http://localhost:11434
   model: qwen3:32b                       # name as it appears in `ollama list`
-  fast_model: qwen3:8b                   # optional; enables the `--fast` flag
+  fast_model: qwen3:8b                   # optional; when set, becomes the summary-mode default (--accurate opts out)
   request_timeout_s: 300                 # ceiling for a single /api/chat call
 
 cache:

@@ -104,6 +104,11 @@ def config_cmd() -> None:
     save_config(cfg)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     click.echo(f"Wrote {CONFIG_PATH}")
+    if fast_model:
+        click.echo(
+            f"Note: `decant url --question ...` will default to the fast tier "
+            f"({fast_model}). Pass --accurate to opt into {model}."
+        )
 
 
 def _prompt_email(default: str | None) -> str:
@@ -319,7 +324,18 @@ def _search_error(
 @click.option(
     "--fast",
     is_flag=True,
-    help="Use ollama.fast_model instead of the default. Ignored if --model is set.",
+    help=(
+        "Use ollama.fast_model. Already the default when fast_model is configured; "
+        "useful for scripts that want to be explicit. Ignored if --model is set."
+    ),
+)
+@click.option(
+    "--accurate",
+    is_flag=True,
+    help=(
+        "Use ollama.model (the accurate tier). Opt-in for the cases where the "
+        "extra latency pays off. Ignored if --model is set."
+    ),
 )
 @click.option("--no-cache", is_flag=True, help="Bypass cache read and write.")
 @click.option(
@@ -342,17 +358,21 @@ def url_cmd(
     mode: str | None,
     model: str | None,
     fast: bool,
+    accurate: bool,
     no_cache: bool,
     timeout_override: int | None,
     allow_partial: bool,
 ) -> None:
     """Fetch one or more URLs sequentially and emit JSON."""
+    if fast and accurate:
+        raise click.UsageError("--fast and --accurate are mutually exclusive.")
+
     try:
         cfg = load_config()
     except ConfigMissingError:
         _emit_config_missing_and_exit()
 
-    resolved_model, tier = _resolve_model(cfg, model, fast)
+    resolved_model, tier = _resolve_model(cfg, model, fast, accurate)
     if resolved_model is None:
         _emit_config_missing_fast_model_and_exit()
 
@@ -399,12 +419,25 @@ def _resolve_mode(mode: str | None, question: str | None) -> str:
 
 
 def _resolve_model(
-    cfg: Config, model_opt: str | None, fast: bool
+    cfg: Config, model_opt: str | None, fast: bool, accurate: bool
 ) -> tuple[str | None, str]:
-    """Pick (model, tier). Returns (None, "fast") when --fast lacks a config."""
+    """Pick (model, tier).
+
+    Order:
+      1. --model X explicit              → (X, "explicit")
+      2. --fast                          → (cfg.ollama.fast_model, "fast")
+                                            — caller errors out if that's None
+      3. --accurate                      → (cfg.ollama.model, "accurate")
+      4. fast_model configured (default) → (cfg.ollama.fast_model, "fast")
+      5. otherwise                       → (cfg.ollama.model, "accurate")
+    """
     if model_opt:
         return model_opt, "explicit"
     if fast:
+        return cfg.ollama.fast_model, "fast"
+    if accurate:
+        return cfg.ollama.model, "accurate"
+    if cfg.ollama.fast_model:
         return cfg.ollama.fast_model, "fast"
     return cfg.ollama.model, "accurate"
 

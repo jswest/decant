@@ -388,10 +388,13 @@ def test_projections_do_not_mutate_input():
     assert "ollama_ms" in src["meta"]
 
 
-# --- Model tier resolution: --fast / --model / meta.tier --------------------
+# --- Model tier resolution: --fast / --accurate / --model / meta.tier --------
 
 
-def test_summary_default_tier_is_accurate(patched_paths, stub_pipeline):
+def test_summary_default_tier_without_fast_model_is_accurate(
+    patched_paths, stub_pipeline
+):
+    """No fast_model configured → default falls back to the accurate tier."""
     result = CliRunner().invoke(
         main, ["url", "https://example.com", "--question", "what?"]
     )
@@ -399,6 +402,19 @@ def test_summary_default_tier_is_accurate(patched_paths, stub_pipeline):
     payload = json.loads(result.output)
     assert payload["meta"]["tier"] == "accurate"
     assert payload["meta"]["model"] == "qwen3:32b"
+
+
+def test_summary_default_tier_with_fast_model_is_fast(
+    patched_paths_with_fast, stub_pipeline
+):
+    """fast_model configured → default flips to the fast tier (issue #23)."""
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "what?"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "fast"
+    assert payload["meta"]["model"] == "qwen3:8b"
 
 
 def test_extract_mode_omits_tier(patched_paths, stub_pipeline):
@@ -425,6 +441,33 @@ def test_fast_flag_without_fast_model_errors(patched_paths, stub_pipeline):
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["code"] == "config_missing_fast_model"
+
+
+def test_accurate_flag_uses_accurate_model(patched_paths_with_fast, stub_pipeline):
+    """--accurate opts out of the new fast default and selects ollama.model."""
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "Q?", "--accurate"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "accurate"
+    assert payload["meta"]["model"] == "qwen3:32b"
+
+
+def test_fast_and_accurate_mutually_exclusive(patched_paths_with_fast, stub_pipeline):
+    result = CliRunner().invoke(
+        main,
+        [
+            "url",
+            "https://example.com",
+            "--question",
+            "Q?",
+            "--fast",
+            "--accurate",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output.lower()
 
 
 def test_explicit_model_beats_fast(patched_paths_with_fast, stub_pipeline):
@@ -456,12 +499,12 @@ def test_both_mode_carries_tier(patched_paths_with_fast, stub_pipeline):
             "Q?",
             "--mode",
             "both",
-            "--fast",
+            "--accurate",
         ],
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["meta"]["tier"] == "fast"
+    assert payload["meta"]["tier"] == "accurate"
 
 
 def test_mode_both_warm_extract_projection_omits_tier(
