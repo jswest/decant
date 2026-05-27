@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -6,8 +7,8 @@ from decant import cache
 
 
 def test_key_stable_for_same_inputs():
-    a = cache.cache_key("https://x.com", "extract", None, "qwen3:32b")
-    b = cache.cache_key("https://x.com", "extract", None, "qwen3:32b")
+    a = cache.cache_key("https://x.com", "summary", "q", "qwen3:32b")
+    b = cache.cache_key("https://x.com", "summary", "q", "qwen3:32b")
     assert a == b
 
 
@@ -15,6 +16,31 @@ def test_key_differs_per_question_and_model():
     base = cache.cache_key("https://x.com", "summary", "q1", "qwen3:32b")
     assert base != cache.cache_key("https://x.com", "summary", "q2", "qwen3:32b")
     assert base != cache.cache_key("https://x.com", "summary", "q1", "qwen3:70b")
+
+
+def test_extract_key_ignores_model():
+    a = cache.cache_key("https://x.com", "extract", None, "qwen3:32b")
+    b = cache.cache_key("https://x.com", "extract", None, "qwen3:70b")
+    assert a == b
+
+
+def test_extract_key_ignores_question():
+    a = cache.cache_key("https://x.com", "extract", None, "m")
+    b = cache.cache_key("https://x.com", "extract", "anything", "m")
+    assert a == b
+
+
+def test_extract_key_differs_from_other_modes():
+    e = cache.cache_key("https://x.com", "extract", None, "m")
+    assert e != cache.cache_key("https://x.com", "summary", None, "m")
+    assert e != cache.cache_key("https://x.com", "both", None, "m")
+
+
+def test_extract_key_shape_is_pinned():
+    """Pin the on-disk key shape so future edits don't silently invalidate user caches."""
+    url = "https://x.com/page"
+    expected = hashlib.sha256(f"{url}|extract".encode()).hexdigest()
+    assert cache.cache_key(url, "extract", None, "any-model") == expected
 
 
 def test_search_key_differs_per_input():
