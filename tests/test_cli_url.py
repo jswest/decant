@@ -56,7 +56,8 @@ def stub_pipeline(monkeypatch):
     # doesn't trip in unrelated happy-path tests.
     stub_md = "# Title\n\n" + ("body " * 60)
     monkeypatch.setattr(
-        "decant.cli.extract_html", lambda html: (stub_md, "trafilatura")
+        "decant.cli.extract_html",
+        lambda html, article=None: (stub_md, "trafilatura"),
     )
     distill_mock = AsyncMock(
         return_value=(
@@ -250,7 +251,7 @@ def test_cache_hit_short_circuits_pipeline(patched_paths, stub_pipeline, monkeyp
         async def fetch(self, *a, **kw):
             raise AssertionError("fetch should not be called on cache hit")
 
-    def explode_extract(html):
+    def explode_extract(html, article=None):
         raise AssertionError("extract should not be called on cache hit")
 
     monkeypatch.setattr("decant.cli.Fetcher", ExplodingFetcher)
