@@ -51,11 +51,42 @@ local LLM. Read:
   page doesn't answer the question.
 - `.summary.page_topic` — one-sentence description of the page.
 - `.summary.findings[]` — up to 8 items, each with a verbatim `quote`,
-  surrounding `context`, and `relevance` ∈ {high, medium, low}.
+  surrounding `context`, and `relevance` ∈ {high, medium, low}. When
+  `--terse` is set, the `quote` field is dropped from each finding (the
+  rest of the shape is unchanged) — see "Terse mode" below.
 
 Prefer summary mode when the user has a *specific* question. Prefer
 extract mode when they want the whole page or you'll be doing your own
 analysis.
+
+### Terse mode — drop the verbatim quotes
+
+    decant url <URL> --question "..." --terse
+
+Cuts `findings[].quote` from the response. You still get the answer,
+the page topic, and each finding's `context` (section/heading) +
+`relevance`, but not the source text. Roughly 30–60% smaller for typical
+pages, since quotes are the biggest contributor to summary tokens.
+
+Reach for `--terse` when:
+- The user wants the answer, not the citations (e.g. "what's the rate
+  limit on the Brave API?").
+- You're chaining several `decant url` calls in one turn and want to
+  keep each response small.
+- You'll be reasoning over the answer yourself rather than showing the
+  user verbatim source.
+
+**Don't** use `--terse` when:
+- The user asked for quotes, citations, or wants to see the source
+  text.
+- The question is legal, regulatory, or compliance-flavored — keep the
+  verbatim quotes so the answer is auditable.
+
+`--terse` combines with `--fast` for the cheapest summary call;
+`--accurate` without `--terse` is the audit/legal setting. `--terse`
+can't be used with `--mode extract` (extract mode doesn't call the
+LLM). Check `.meta.terse` (boolean) on every summary/both response to
+confirm which shape you got back.
 
 ### Both — markdown and findings in one response
 
@@ -101,6 +132,8 @@ when one bad URL shouldn't kill downstream shell-pipeline work.
   tier. `--model` overrides both. Check `meta.tier` to see which
   model was used (`"fast"`, `"accurate"`, or `"explicit"`). The two
   flags are mutually exclusive.
+- `--terse` — drop verbatim quote blocks from the summary (see "Terse
+  mode" above). Combine with `--fast` for the cheapest summary call.
 - `--timeout SECONDS` — per-URL fetch ceiling.
 - `--allow-partial` — in batch mode, exit 0 if at least one URL
   succeeded. No effect on single-URL runs.
@@ -212,10 +245,12 @@ Errors come back as JSON objects with a `code` field instead of a
 - Results are cached 24h by default. Re-asking the same question
   against the same URL is free; the response will have `meta.cached:
   true`. The key shape is `url + mode + question + model` for summary
-  and both modes; extract mode keys on `url` alone (model- and
-  question-independent). **Running `--mode both` warms the extract and
-  summary caches too** — if you might want both views, do `--mode both`
-  first so follow-up single-mode calls hit cache.
+  and both modes (with a `|terse` suffix when `--terse` is set, so terse
+  and full responses cache separately); extract mode keys on `url`
+  alone (model-, question-, and terse-independent). **Running `--mode
+  both` warms the extract and summary caches too** — if you might want
+  both views, do `--mode both` first so follow-up single-mode calls hit
+  cache.
 
 ## Quick reference
 
@@ -223,6 +258,7 @@ Errors come back as JSON objects with a `code` field instead of a
     decant url <URL> --question "..."             # LLM findings (fast model if configured, else accurate)
     decant url <URL> --question "..." --accurate  # LLM findings (force accurate model)
     decant url <URL> --question "..." --fast      # LLM findings (force fast model)
+    decant url <URL> --question "..." --terse     # LLM answer without verbatim quotes (smaller)
     decant url <URL> --question "..." --mode both # both
     decant url <URL1> <URL2> <URL3>               # batch (sequential)
     decant search "<query>"                       # find candidate URLs

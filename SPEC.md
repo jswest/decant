@@ -51,6 +51,7 @@ Flags:
 - `--model MODEL` — override the configured Ollama model for this run.
 - `--fast` — use `ollama.fast_model`. Already the default when `fast_model` is configured (see resolution table); useful for scripts that want to be explicit. Ignored when `--model` is also passed. Errors with `config_missing_fast_model` if no `fast_model` is configured.
 - `--accurate` — use `ollama.model` (the accurate tier). Opt-in for cases where the extra latency pays off (legal/compliance, very large pages, audit work). Ignored when `--model` is also passed. Mutually exclusive with `--fast`.
+- `--terse` — drop verbatim `findings[].quote` blocks from the summary output. Each finding keeps `context` and `relevance` so the answer remains traceable to a section of the page, but the verbatim text is gone. Smaller, cheaper to feed back into a conversation; less auditable. Errors with a CLI UsageError if combined with `--mode extract` (extract mode doesn't call Ollama, so there's nothing to be terse about).
 - `--no-cache` — bypass cache for both read and write on this run.
 - `--timeout SECONDS` — per-URL hard ceiling (default 60s for fetch, 300s for Ollama).
 
@@ -224,8 +225,8 @@ Verdict:
 
 - **Location:** `~/.decant/cache/` (one JSON file per entry).
 - **Key:**
-  - **Summary / both modes:** `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)`. Different questions or models produce different entries (the LLM output depends on both).
-  - **Extract mode:** `sha256(url + "|extract")`. Question and model are ignored because the extracted markdown depends on neither — swapping `--model` doesn't bust an extract cache.
+  - **Summary / both modes:** `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)` for non-terse calls; `sha256(url + "|" + mode + "|" + (question or "") + "|" + model + "|terse")` when `--terse` is set. Different questions, models, or terse settings produce different entries (the LLM output depends on all three). Non-terse keys are byte-identical to their pre-`--terse` shape, so the issue-#22 upgrade does not invalidate existing user caches.
+  - **Extract mode:** `sha256(url + "|extract")`. Question, model, and terse-ness are all ignored because the extracted markdown depends on none of them — swapping `--model` or toggling `--terse` doesn't bust an extract cache.
 - **`--mode both` warms single-mode caches:** running `--mode both` writes three entries — the full `both` payload at the `both` key, plus extract-only and summary-only projections under the corresponding single-mode keys. A follow-up `--mode extract` or `--mode summary` (same question + model) call against the same URL hits cache.
 - **TTL:** `cache.ttl_hours` from config, default 24. Enforced via file `mtime`. No background cleanup; stale files are simply overwritten on next miss.
 - **Eviction:** none in v0. `decant cache clear` is the only sweep.
@@ -262,7 +263,7 @@ Non-negotiable, hardcoded:
     "page_topic": "What this page is about, one sentence.",
     "findings": [
       {
-        "quote": "Verbatim text from the page.",
+        "quote": "Verbatim text from the page.",  // omitted when --terse
         "context": "Section heading or surrounding context.",
         "relevance": "high"
       }
@@ -276,6 +277,7 @@ Non-negotiable, hardcoded:
     "robots_checked": true,
     "model": "qwen3:32b",
     "tier": "accurate",
+    "terse": false,
     "soft_404": {
       "verdict": "unlikely",
       "reasons": []
@@ -287,8 +289,9 @@ Non-negotiable, hardcoded:
 Notes:
 - `mode == "summary"`: `extract.markdown` is omitted to keep the response compact; `extract.extractor` and `extract.char_count` are still returned so the caller knows what Ollama saw.
 - `mode == "both"`: both `extract.markdown` and `summary` are present.
-- `mode == "extract"`: `summary` is omitted; `ollama_ms` and `tier` are absent from `meta`.
+- `mode == "extract"`: `summary` is omitted; `ollama_ms`, `tier`, and `terse` are absent from `meta`.
 - `meta.tier` ∈ `{"fast", "accurate", "explicit"}`. See the resolution table under `decant url`.
+- `meta.terse` is a boolean, reported on every `summary`/`both` response (whether or not `--terse` was passed). Terse responses have no `findings[].quote` keys; the rest of the shape is unchanged.
 
 ### Error
 
@@ -335,12 +338,25 @@ class DistillResult(BaseModel):
     answer: str | None
     page_topic: str
     findings: list[Finding] = Field(..., max_length=8)
+
+# --terse uses the same shape minus the verbatim quote field, so Ollama's
+# schema-constrained decoder never generates quote text in the first place.
+class TerseFinding(BaseModel):
+    context: str
+    relevance: Literal["high", "medium", "low"]
+
+class TerseDistillResult(BaseModel):
+    answer: str | None
+    page_topic: str
+    findings: list[TerseFinding] = Field(..., max_length=8)
 ```
 
 The Pydantic model serves two roles:
 
 1. **Constrain Ollama's decoder.** Pass `DistillResult.model_json_schema()` as the `format` field on the `/api/chat` request body. Ollama (v0.5+) constrains token generation to satisfy the schema — empty/malformed JSON and wrong-shaped objects become essentially impossible at the syntactic level.
 2. **Validate on return.** Parse Ollama's response with `DistillResult.model_validate_json(content)`. This catches the rare cases the schema-constrained decoder can't (e.g. an older Ollama that ignores `format`, or a model producing semantically wrong but schema-shaped content if we add stricter field constraints later).
+
+With `--terse`, both roles use `TerseDistillResult` instead — Ollama's `format` schema has no `quote` field, so the model never emits quote text and the response cost drops accordingly. The terse prompt template mirrors the regular one but instructs the model to answer concisely and use `findings[]` only to point at section/heading context.
 
 The textual prompt remains useful for steering content quality (verbatim quotes, no invention) even though the schema enforces shape:
 

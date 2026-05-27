@@ -142,3 +142,58 @@ def test_build_prompt_includes_question_and_markdown():
     assert "How many?" in p
     assert "this is the page" in p
     assert "verbatim" in p.lower()
+
+
+def test_build_prompt_terse_drops_quote_schema_field():
+    """Terse prompt must not advertise a `quote` field in the schema example —
+    that's the field we're asking the model NOT to produce."""
+    p = build_prompt("How many?", "this is the page", terse=True)
+    assert "How many?" in p
+    assert "this is the page" in p
+    assert '"quote"' not in p
+
+
+def _valid_terse_chat_response() -> dict:
+    return {
+        "message": {
+            "content": json.dumps(
+                {
+                    "answer": "Yes.",
+                    "page_topic": "A page about things.",
+                    "findings": [{"context": "Intro", "relevance": "high"}],
+                }
+            )
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_distill_terse_uses_terse_schema():
+    captured: dict = {}
+
+    def handler(req):
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(200, json=_valid_terse_chat_response())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await distill(
+            client, "http://x", "qwen3:32b", "Q?", "md", timeout_s=10, terse=True
+        )
+    schema_text = json.dumps(captured["body"]["format"])
+    assert "quote" not in schema_text
+
+
+@pytest.mark.asyncio
+async def test_distill_terse_returns_terse_result():
+    from decant.models import TerseDistillResult
+
+    transport = httpx.MockTransport(
+        lambda req: httpx.Response(200, json=_valid_terse_chat_response())
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        result, _, _ = await distill(
+            client, "http://x", "qwen3:32b", "Q?", "md", timeout_s=10, terse=True
+        )
+    assert isinstance(result, TerseDistillResult)
+    assert result.findings[0].context == "Intro"
+    assert not hasattr(result.findings[0], "quote")

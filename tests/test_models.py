@@ -1,7 +1,14 @@
 import pytest
 from pydantic import ValidationError
 
-from decant.models import DistillResult, ErrorCode, Finding, SearchResult
+from decant.models import (
+    DistillResult,
+    ErrorCode,
+    Finding,
+    SearchResult,
+    TerseDistillResult,
+    TerseFinding,
+)
 
 
 def test_finding_rejects_unknown_relevance():
@@ -51,6 +58,29 @@ def test_error_code_values_match_spec():
         "search_unavailable",
         "search_bad_query",
     }
+
+
+def test_terse_finding_has_no_quote_field():
+    f = TerseFinding(context="ctx", relevance="high")
+    assert f.model_dump() == {"context": "ctx", "relevance": "high"}
+
+
+def test_terse_distill_result_schema_excludes_quote():
+    import json as _json
+
+    schema_text = _json.dumps(TerseDistillResult.model_json_schema())
+    assert "quote" not in schema_text
+
+
+def test_terse_distill_result_caps_findings_at_eight():
+    findings = [TerseFinding(context="ctx", relevance="low") for _ in range(8)]
+    TerseDistillResult(answer=None, page_topic="p", findings=findings)
+    with pytest.raises(ValidationError):
+        TerseDistillResult(
+            answer=None,
+            page_topic="p",
+            findings=findings + [TerseFinding(context="ctx", relevance="low")],
+        )
 
 
 def test_search_result_age_nullable():

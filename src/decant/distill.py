@@ -5,7 +5,7 @@ import time
 import httpx
 from pydantic import ValidationError
 
-from decant.models import DistillResult
+from decant.models import DistillResult, TerseDistillResult
 
 MAX_MARKDOWN_CHARS = 80_000
 
@@ -42,6 +42,39 @@ RULES:
 - Output ONLY the JSON object. No commentary, no markdown fences.
 """
 
+_TERSE_PROMPT_TEMPLATE = """\
+You are extracting information from a web page to help answer a research question.
+
+QUESTION:
+{question}
+
+PAGE CONTENT (markdown):
+---
+{markdown}
+---
+
+Return ONLY a JSON object with this exact schema:
+
+{{
+  "answer": "<direct answer to the question in 1-3 sentences, or null if the page does not answer it>",
+  "page_topic": "<one sentence describing what this page is about>",
+  "findings": [
+    {{
+      "context": "<the section heading or surrounding context where the supporting text lives>",
+      "relevance": "high" | "medium" | "low"
+    }}
+  ]
+}}
+
+RULES:
+- Answer concisely. Do not include source passages — the caller has opted out of verbatim quotes.
+- Each finding points at WHERE on the page the answer is grounded (section/heading), not WHAT it says.
+- Maximum 8 findings.
+- If the page does not answer the question, set "answer" to null. Still include up to 3 tangentially relevant findings if any exist.
+- Do not invent content not present in the page.
+- Output ONLY the JSON object. No commentary, no markdown fences.
+"""
+
 
 class OllamaUnavailableError(Exception):
     """Could not reach the configured Ollama host."""
@@ -61,8 +94,9 @@ def truncate(markdown: str, limit: int = MAX_MARKDOWN_CHARS) -> tuple[str, bool]
     return markdown[:limit], True
 
 
-def build_prompt(question: str, markdown: str) -> str:
-    return _PROMPT_TEMPLATE.format(question=question, markdown=markdown)
+def build_prompt(question: str, markdown: str, terse: bool = False) -> str:
+    template = _TERSE_PROMPT_TEMPLATE if terse else _PROMPT_TEMPLATE
+    return template.format(question=question, markdown=markdown)
 
 
 async def distill(
@@ -72,18 +106,21 @@ async def distill(
     question: str,
     markdown: str,
     timeout_s: int,
-) -> tuple[DistillResult, int, bool]:
-    """POST to Ollama's /api/chat, validate the response against DistillResult.
+    terse: bool = False,
+) -> tuple[DistillResult | TerseDistillResult, int, bool]:
+    """POST to Ollama's /api/chat, validate the response against the right schema.
 
-    Returns (result, elapsed_ms, truncated). Retries once on validation
-    failure with the same payload, since (per spec) schema-constrained
-    generation should make malformed JSON very rare.
+    Returns (result, elapsed_ms, truncated). When terse=True, the response is
+    constrained to TerseDistillResult (no verbatim quotes). Retries once on
+    validation failure with the same payload, since (per spec) schema-
+    constrained generation should make malformed JSON very rare.
     """
     md, truncated = truncate(markdown)
+    result_cls = TerseDistillResult if terse else DistillResult
     body = {
         "model": model,
-        "messages": [{"role": "user", "content": build_prompt(question, md)}],
-        "format": DistillResult.model_json_schema(),
+        "messages": [{"role": "user", "content": build_prompt(question, md, terse)}],
+        "format": result_cls.model_json_schema(),
         "stream": False,
     }
     url = f"{host.rstrip('/')}/api/chat"
@@ -103,7 +140,7 @@ async def distill(
 
         content = r.json().get("message", {}).get("content", "")
         try:
-            result = DistillResult.model_validate_json(content)
+            result = result_cls.model_validate_json(content)
             elapsed_ms = int((time.monotonic() - start) * 1000)
             return result, elapsed_ms, truncated
         except ValidationError as e:

@@ -41,6 +41,31 @@ def test_extract_key_shape_is_pinned():
     url = "https://x.com/page"
     expected = hashlib.sha256(f"{url}|extract".encode()).hexdigest()
     assert cache.cache_key(url, "extract", None, "any-model") == expected
+    # The terse bit must not change extract-mode keys: extract output is
+    # terse-agnostic, and users with existing caches mustn't have them
+    # invalidated by upgrading to a `--terse`-aware build.
+    assert cache.cache_key(url, "extract", None, "any-model", terse=True) == expected
+
+
+def test_summary_key_pins_non_terse_shape():
+    """Pin the pre-`--terse` summary key shape so existing user caches survive."""
+    url = "https://x.com/page"
+    raw = f"{url}|summary|q|m"
+    expected = hashlib.sha256(raw.encode()).hexdigest()
+    assert cache.cache_key(url, "summary", "q", "m") == expected
+    assert cache.cache_key(url, "summary", "q", "m", terse=False) == expected
+
+
+def test_summary_key_differs_on_terse_bit():
+    a = cache.cache_key("https://x.com", "summary", "q", "m")
+    b = cache.cache_key("https://x.com", "summary", "q", "m", terse=True)
+    assert a != b
+
+
+def test_both_key_differs_on_terse_bit():
+    a = cache.cache_key("https://x.com", "both", "q", "m")
+    b = cache.cache_key("https://x.com", "both", "q", "m", terse=True)
+    assert a != b
 
 
 def test_search_key_differs_per_input():

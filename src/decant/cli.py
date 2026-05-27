@@ -337,6 +337,11 @@ def _search_error(
         "extra latency pays off. Ignored if --model is set."
     ),
 )
+@click.option(
+    "--terse",
+    is_flag=True,
+    help="Drop verbatim source quotes from summary output. Smaller, less auditable.",
+)
 @click.option("--no-cache", is_flag=True, help="Bypass cache read and write.")
 @click.option(
     "--timeout",
@@ -359,6 +364,7 @@ def url_cmd(
     model: str | None,
     fast: bool,
     accurate: bool,
+    terse: bool,
     no_cache: bool,
     timeout_override: int | None,
     allow_partial: bool,
@@ -376,12 +382,17 @@ def url_cmd(
     if resolved_model is None:
         _emit_config_missing_fast_model_and_exit()
 
+    resolved_mode = _resolve_mode(mode, question)
+    if terse and resolved_mode == "extract":
+        raise click.UsageError("--terse requires --question or --mode summary|both")
+
     opts = _RunOpts(
         cfg=cfg,
-        mode=_resolve_mode(mode, question),
+        mode=resolved_mode,
         question=question,
         model=resolved_model,
         tier=tier,
+        terse=terse,
         fetch_timeout=timeout_override or cfg.fetch.request_timeout_s,
         no_cache=no_cache,
         verbose=ctx.obj.get("verbose", False),
@@ -479,6 +490,7 @@ class _RunOpts:
     question: str | None
     model: str
     tier: str
+    terse: bool
     fetch_timeout: int
     no_cache: bool
     verbose: bool
@@ -518,7 +530,7 @@ async def _process_one(
         return _error(url, ErrorCode.INVALID_URL, f"unsupported scheme: {parts.scheme!r}")
 
     # 2. Cache lookup.
-    key = cache_mod.cache_key(url, mode, question, model)
+    key = cache_mod.cache_key(url, mode, question, model, opts.terse)
     if not opts.no_cache:
         hit = cache_mod.read(key, cfg.cache.ttl_hours, CACHE_DIR)
         if hit is not None:
@@ -571,6 +583,7 @@ async def _process_one(
                 question or "",
                 markdown,
                 cfg.ollama.request_timeout_s,
+                terse=opts.terse,
             )
         except OllamaUnavailableError as e:
             return _error(url, ErrorCode.OLLAMA_UNAVAILABLE, str(e))
@@ -609,6 +622,7 @@ async def _process_one(
         meta["ollama_ms"] = ollama_ms
     if mode in ("summary", "both"):
         meta["tier"] = opts.tier
+        meta["terse"] = opts.terse
     if truncated:
         meta["truncated"] = True
 
@@ -633,7 +647,9 @@ async def _process_one(
             # Extract-mode keys ignore question + model (see cache.cache_key),
             # so we pass placeholders to make the intent explicit.
             extract_key = cache_mod.cache_key(url, "extract", None, "")
-            summary_key = cache_mod.cache_key(url, "summary", question, model)
+            summary_key = cache_mod.cache_key(
+                url, "summary", question, model, opts.terse
+            )
             cache_mod.write(extract_key, _extract_projection(result_payload), CACHE_DIR)
             cache_mod.write(summary_key, _summary_projection(result_payload), CACHE_DIR)
 
@@ -651,6 +667,7 @@ def _extract_projection(payload: dict) -> dict:
     p.pop("summary", None)
     p["meta"].pop("ollama_ms", None)
     p["meta"].pop("tier", None)
+    p["meta"].pop("terse", None)
     p["meta"].pop("truncated", None)
     return p
 
