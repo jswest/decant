@@ -262,3 +262,118 @@ def test_cache_hit_short_circuits_pipeline(patched_paths, stub_pipeline, monkeyp
     assert payload["title"] == "Cached!"
     assert payload["meta"]["cached"] is True
     assert payload["meta"]["cached_at"].endswith("Z")
+
+
+def test_mode_both_warms_extract_cache(patched_paths, stub_pipeline):
+    """After --mode both, a follow-up extract-mode call hits cache."""
+    url = "https://warm.example.com"
+    runner = CliRunner()
+
+    # First call: --mode both — fresh (not cached), populates the both,
+    # extract, and summary keys.
+    r1 = runner.invoke(main, ["url", url, "--question", "Q?", "--mode", "both"])
+    assert r1.exit_code == 0, r1.output
+    assert json.loads(r1.output)["meta"]["cached"] is False
+
+    # Second call: extract mode, no question. Should hit the warmed cache.
+    r2 = runner.invoke(main, ["url", url])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["mode"] == "extract"
+    assert p2["meta"]["cached"] is True
+    assert "markdown" in p2["extract"]
+    assert "summary" not in p2
+    assert "ollama_ms" not in p2["meta"]  # cache invariant: matches fresh extract
+    assert "truncated" not in p2["meta"]
+
+
+def test_mode_both_warms_summary_cache(patched_paths, stub_pipeline):
+    """After --mode both, a follow-up summary-mode call (same q + model) hits cache."""
+    url = "https://warm-summary.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(main, ["url", url, "--question", "Q?", "--mode", "both"])
+    assert r1.exit_code == 0, r1.output
+    assert json.loads(r1.output)["meta"]["cached"] is False
+
+    r2 = runner.invoke(main, ["url", url, "--question", "Q?"])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["mode"] == "summary"
+    assert p2["meta"]["cached"] is True
+    assert "summary" in p2
+    assert "markdown" not in p2["extract"]  # cache invariant: matches fresh summary
+
+
+def test_extract_cache_survives_model_change(patched_paths, stub_pipeline):
+    """A pure extract-mode call followed by another with --model X still hits cache."""
+    url = "https://model-change.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(main, ["url", url])
+    assert r1.exit_code == 0, r1.output
+
+    r2 = runner.invoke(main, ["url", url, "--model", "totally-different"])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["meta"]["cached"] is True
+
+
+# --- Projection helper unit tests (pin the cache invariant) ------------------
+
+
+def _both_payload_sample() -> dict:
+    """A sample --mode both result payload as cli._process_one would compose it."""
+    return {
+        "url": "https://x.com",
+        "final_url": "https://x.com",
+        "title": "T",
+        "fetched_at": "2026-05-26T00:00:00Z",
+        "mode": "both",
+        "extract": {"extractor": "trafilatura", "char_count": 5, "markdown": "hi"},
+        "summary": {"answer": "yes", "page_topic": "p", "findings": []},
+        "meta": {
+            "playwright_ms": 10,
+            "extract_ms": 1,
+            "ollama_ms": 42,
+            "truncated": True,
+            "cached": False,
+            "robots_checked": True,
+            "model": "qwen3:32b",
+            "soft_404": {"verdict": "unlikely", "reasons": []},
+        },
+    }
+
+
+def test_extract_projection_drops_summary_ollama_ms_and_truncated():
+    from decant.cli import _extract_projection
+
+    p = _extract_projection(_both_payload_sample())
+    assert p["mode"] == "extract"
+    assert "summary" not in p
+    assert "ollama_ms" not in p["meta"]
+    assert "truncated" not in p["meta"]
+    assert "markdown" in p["extract"]  # extract mode keeps markdown
+
+
+def test_summary_projection_drops_markdown_only():
+    from decant.cli import _summary_projection
+
+    p = _summary_projection(_both_payload_sample())
+    assert p["mode"] == "summary"
+    assert "summary" in p
+    assert "markdown" not in p["extract"]
+    assert "ollama_ms" in p["meta"]  # summary mode keeps ollama_ms
+
+
+def test_projections_do_not_mutate_input():
+    from decant.cli import _extract_projection, _summary_projection
+
+    src = _both_payload_sample()
+    _extract_projection(src)
+    _summary_projection(src)
+    # Source unchanged — projections deepcopy.
+    assert src["mode"] == "both"
+    assert "summary" in src
+    assert "markdown" in src["extract"]
+    assert "ollama_ms" in src["meta"]

@@ -158,7 +158,7 @@ Loading: missing keys fall back to defaults; missing file is an error for any co
 For each URL, in order:
 
 1. **Validate** — URL must parse, scheme must be `http` or `https`. Otherwise: `invalid_url`.
-2. **Cache lookup** (unless `--no-cache`) — compute key as `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)`. If `~/.decant/cache/<key>.json` exists and `mtime` is within `cache.ttl_hours`, return cached result with `meta.cached: true`.
+2. **Cache lookup** (unless `--no-cache`) — compute key per the `Key` rule under §"Caching". If `~/.decant/cache/<key>.json` exists and `mtime` is within `cache.ttl_hours`, return cached result with `meta.cached: true`.
 3. **robots.txt** — fetch `<scheme>://<host>/robots.txt` (with our UA). Parse with `protego` (more spec-correct than stdlib `urllib.robotparser`). Cache parsed result in-process for the duration of the run. If our UA is disallowed for the path: emit `robots_disallowed` error and stop.
 4. **Playwright fetch** — headless Chromium, block image/font/media resources via route handler, wait for `domcontentloaded` then `networkidle` (cap at `fetch.request_timeout_s`). Set User-Agent. Capture `final_url`, page title, full HTML.
 5. **Extract** — three-tier fallback chain. Stop at first non-empty result:
@@ -206,10 +206,13 @@ Verdict:
 ## Caching
 
 - **Location:** `~/.decant/cache/` (one JSON file per entry).
-- **Key:** `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)`. Different questions against the same URL get separate cache entries. Different models likewise — switching from `qwen3:32b` to `qwen3:70b` won't reuse the prior distillation.
+- **Key:**
+  - **Summary / both modes:** `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)`. Different questions or models produce different entries (the LLM output depends on both).
+  - **Extract mode:** `sha256(url + "|extract")`. Question and model are ignored because the extracted markdown depends on neither — swapping `--model` doesn't bust an extract cache.
+- **`--mode both` warms single-mode caches:** running `--mode both` writes three entries — the full `both` payload at the `both` key, plus extract-only and summary-only projections under the corresponding single-mode keys. A follow-up `--mode extract` or `--mode summary` (same question + model) call against the same URL hits cache.
 - **TTL:** `cache.ttl_hours` from config, default 24. Enforced via file `mtime`. No background cleanup; stale files are simply overwritten on next miss.
 - **Eviction:** none in v0. `decant cache clear` is the only sweep.
-- **Cache invariant:** a cached result is byte-identical to a fresh result for the same key, except `meta.cached` flips to `true` and `meta.cached_at` is added.
+- **Cache invariant:** a cached result is byte-identical to a fresh result for the same key, except `meta.cached` flips to `true` and `meta.cached_at` is added. Projections written during `--mode both` warming satisfy this invariant against fresh single-mode runs.
 
 ## Polite scraping policy
 

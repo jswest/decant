@@ -198,7 +198,11 @@ Errors come back as JSON objects with a `code` field instead of a
   rather than calling decant repeatedly.
 - Results are cached 24h by default. Re-asking the same question
   against the same URL is free; the response will have `meta.cached:
-  true`.
+  true`. The key shape is `url + mode + question + model` for summary
+  and both modes; extract mode keys on `url` alone (model- and
+  question-independent). **Running `--mode both` warms the extract and
+  summary caches too** — if you might want both views, do `--mode both`
+  first so follow-up single-mode calls hit cache.
 
 ## Quick reference
 

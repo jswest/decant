@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import sys
 import time
@@ -535,11 +536,42 @@ async def _process_one(
     if summary is not None:
         result_payload["summary"] = summary
 
-    # 8. Cache write.
+    # 8. Cache write. `--mode both` also warms the single-mode caches via
+    # projections so a follow-up `--mode extract` or `--mode summary` call
+    # against the same URL hits cache instead of re-fetching.
     if not opts.no_cache:
         cache_mod.write(key, result_payload, CACHE_DIR)
+        if mode == "both":
+            # Extract-mode keys ignore question + model (see cache.cache_key),
+            # so we pass placeholders to make the intent explicit.
+            extract_key = cache_mod.cache_key(url, "extract", None, "")
+            summary_key = cache_mod.cache_key(url, "summary", question, model)
+            cache_mod.write(extract_key, _extract_projection(result_payload), CACHE_DIR)
+            cache_mod.write(summary_key, _summary_projection(result_payload), CACHE_DIR)
 
     return result_payload
+
+
+def _extract_projection(payload: dict) -> dict:
+    """Return what a fresh `--mode extract` run for the same URL would have written.
+
+    deepcopy is required: `payload` is returned to the caller and json-dumped to
+    stdout, so in-place mutation would corrupt the user-facing output.
+    """
+    p = copy.deepcopy(payload)
+    p["mode"] = "extract"
+    p.pop("summary", None)
+    p["meta"].pop("ollama_ms", None)
+    p["meta"].pop("truncated", None)
+    return p
+
+
+def _summary_projection(payload: dict) -> dict:
+    """Return what a fresh `--mode summary` run for same URL+question+model would have written."""
+    p = copy.deepcopy(payload)
+    p["mode"] = "summary"
+    p["extract"].pop("markdown", None)
+    return p
 
 
 def _error(

@@ -10,7 +10,16 @@ from decant.config import CACHE_DIR
 
 
 def cache_key(url: str, mode: str, question: str | None, model: str) -> str:
-    raw = f"{url}|{mode}|{question or ''}|{model}"
+    """Compute a cache key.
+
+    Extract-mode keys ignore `question` and `model` — the extracted markdown
+    depends on neither. Summary/both keys include both, since the LLM output
+    is question- and model-dependent.
+    """
+    if mode == "extract":
+        raw = f"{url}|extract"
+    else:
+        raw = f"{url}|{mode}|{question or ''}|{model}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 

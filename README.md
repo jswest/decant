@@ -224,7 +224,12 @@ uv run decant cache stats     # {"entries": N, "total_bytes": M, "oldest": ..., 
 uv run decant cache clear     # {"cleared": N, "freed_bytes": M}
 ```
 
-The cache key is `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)`. Different questions or different models get separate entries. TTL is configurable; default is 24 hours, enforced via file mtime.
+The cache key depends on the mode:
+
+- **Summary / both:** `sha256(url + mode + question + model)` — different questions or models get separate entries.
+- **Extract:** `sha256(url + "extract")` — question and model are ignored, since the extracted markdown depends on neither.
+
+Running `--mode both` writes **three** entries — the full `both` payload plus single-mode projections — so a follow-up `--mode extract` or `--mode summary` against the same URL hits cache instead of refetching. TTL is configurable; default is 24 hours, enforced via file mtime.
 
 ### Version
 
