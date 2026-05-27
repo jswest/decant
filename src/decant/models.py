@@ -13,6 +13,11 @@ class ErrorCode(str, Enum):
     OLLAMA_TIMEOUT = "ollama_timeout"
     OLLAMA_BAD_JSON = "ollama_bad_json"
     CONFIG_MISSING = "config_missing"
+    SEARCH_NO_API_KEY = "search_no_api_key"
+    SEARCH_UNAUTHORIZED = "search_unauthorized"
+    SEARCH_RATE_LIMITED = "search_rate_limited"
+    SEARCH_UNAVAILABLE = "search_unavailable"
+    SEARCH_BAD_QUERY = "search_bad_query"
 
 
 class Finding(BaseModel):
@@ -25,3 +30,11 @@ class DistillResult(BaseModel):
     answer: str | None
     page_topic: str
     findings: list[Finding] = Field(..., max_length=8)
+
+
+class SearchResult(BaseModel):
+    url: str
+    title: str
+    hostname: str
+    age: str | None
+    snippets: list[str]

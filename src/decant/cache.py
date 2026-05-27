@@ -14,6 +14,18 @@ def cache_key(url: str, mode: str, question: str | None, model: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def search_cache_key(
+    query: str,
+    top: int,
+    freshness: str | None,
+    country: str,
+    lang: str,
+    token_budget: int,
+) -> str:
+    raw = f"search|{query}|{top}|{freshness or ''}|{country}|{lang}|{token_budget}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
