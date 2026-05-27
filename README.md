@@ -353,4 +353,4 @@ The implementation lives under `src/decant/`. Module roles are documented in [SP
 
 ## License
 
-MIT.
+MIT — see [LICENSE](./LICENSE).
