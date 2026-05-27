@@ -7,9 +7,12 @@ that the CLI maps onto the closed ErrorCode set.
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
+
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context"
 DEFAULT_TIMEOUT_S = 30  # per Brave's guidance
@@ -146,8 +149,23 @@ def _flatten(body: dict) -> dict:
                 "url": url,
                 "title": item.get("title") or src.get("title") or "",
                 "hostname": src.get("hostname") or "",
-                "age": src.get("age"),
+                "age": _pick_iso_date(src.get("age")),
                 "snippets": item.get("snippets") or [],
             }
         )
     return {"results": results}
+
+
+def _pick_iso_date(age: object) -> str | None:
+    """Brave's `age` can be a list, a string, or absent. Return one ISO date or None.
+
+    Observed shapes from `/llm/context`:
+        ["Saturday, July 26, 2025", "2025-07-26", "305 days ago"]
+        []
+        absent (None)
+    """
+    candidates = age if isinstance(age, list) else [age] if isinstance(age, str) else []
+    for c in candidates:
+        if isinstance(c, str) and _ISO_DATE_RE.match(c):
+            return c
+    return None

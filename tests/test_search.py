@@ -210,6 +210,87 @@ async def test_search_drops_items_missing_url():
 
 
 @pytest.mark.asyncio
+async def test_search_picks_iso_date_from_braves_age_list():
+    """Brave returns `age` as a list of strings (human, ISO, relative). Pick the ISO."""
+    body = {
+        "grounding": {
+            "generic": [{"url": "https://x.com/a", "title": "A", "snippets": ["s"]}]
+        },
+        "sources": {
+            "https://x.com/a": {
+                "hostname": "x.com",
+                "age": ["Saturday, July 26, 2025", "2025-07-26", "305 days ago"],
+            }
+        },
+    }
+    async with _client(lambda r: httpx.Response(200, json=body)) as client:
+        out, _ = await search(
+            client, "k", "q",
+            top=10, token_budget=4096, freshness=None, country="us", lang="en",
+        )
+    assert out["results"][0]["age"] == "2025-07-26"
+
+
+@pytest.mark.asyncio
+async def test_search_age_empty_list_becomes_none():
+    body = {
+        "grounding": {
+            "generic": [{"url": "https://x.com/a", "title": "A", "snippets": ["s"]}]
+        },
+        "sources": {"https://x.com/a": {"hostname": "x.com", "age": []}},
+    }
+    async with _client(lambda r: httpx.Response(200, json=body)) as client:
+        out, _ = await search(
+            client, "k", "q",
+            top=10, token_budget=4096, freshness=None, country="us", lang="en",
+        )
+    assert out["results"][0]["age"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_age_picks_first_iso_when_multiple():
+    """Documents the picking policy: first ISO-shaped entry wins."""
+    body = {
+        "grounding": {
+            "generic": [{"url": "https://x.com/a", "title": "A", "snippets": ["s"]}]
+        },
+        "sources": {
+            "https://x.com/a": {
+                "hostname": "x.com",
+                "age": ["2025-07-26", "2026-01-01"],  # both ISO; first wins
+            }
+        },
+    }
+    async with _client(lambda r: httpx.Response(200, json=body)) as client:
+        out, _ = await search(
+            client, "k", "q",
+            top=10, token_budget=4096, freshness=None, country="us", lang="en",
+        )
+    assert out["results"][0]["age"] == "2025-07-26"
+
+
+@pytest.mark.asyncio
+async def test_search_age_list_without_iso_becomes_none():
+    body = {
+        "grounding": {
+            "generic": [{"url": "https://x.com/a", "title": "A", "snippets": ["s"]}]
+        },
+        "sources": {
+            "https://x.com/a": {
+                "hostname": "x.com",
+                "age": ["Yesterday", "1 day ago"],  # no ISO entry
+            }
+        },
+    }
+    async with _client(lambda r: httpx.Response(200, json=body)) as client:
+        out, _ = await search(
+            client, "k", "q",
+            top=10, token_budget=4096, freshness=None, country="us", lang="en",
+        )
+    assert out["results"][0]["age"] is None
+
+
+@pytest.mark.asyncio
 async def test_search_drops_results_without_source_entry():
     """Items in grounding.generic[] whose URL isn't in sources are dropped (POI/maps)."""
     body = {
