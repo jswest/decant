@@ -24,6 +24,32 @@ uv run decant config
 
 This writes `~/.decant/config.yaml` and creates `~/.decant/cache/`.
 
+## Install the skill
+
+The agent-facing skill lives at [`skills/decant.md`](./skills/decant.md). Copy it into your harness's skills directory:
+
+```bash
+cp skills/decant.md ~/.claude/skills/decant.md
+```
+
+Works with any harness that reads Anthropic's Agent Skills format — Claude Code, [Pi](https://pi.dev), [Goose](https://goose-docs.ai/), Cowork. The skill teaches the agent when to reach for `decant` instead of a built-in fetch, how to invoke each mode (`extract` / `summary` / `both`), how to parse the JSON output, and how to recover from each error code.
+
+For the agent to actually be able to run `decant`, install it as a CLI tool so the binary is on `PATH` from wherever the agent happens to be working:
+
+```bash
+uv tool install .                  # or: uv tool install --editable .
+```
+
+`uv run decant` only resolves inside this project directory; `uv tool install` makes `decant` available globally.
+
+**Re-copy after every `git pull`.** Pre-1.0, the skill contract changes often — flags rename, output shapes shift, new modes land. Your harness reads the skill from where you copied it, not from this repo. After every pull, overwrite the installed copy:
+
+```bash
+cp skills/decant.md ~/.claude/skills/decant.md
+```
+
+The CLI itself resolves through the installed package, so the same `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync with the contract the skill describes.
+
 ## Usage
 
 ### Extract clean markdown
@@ -282,16 +308,6 @@ Non-negotiable, hardcoded:
 - **Crawling.** Decant fetches the URLs it is given. It does not follow links beyond ordinary HTTP redirects.
 - **Backwards compatibility with itself.** Pre-1.0: breaking changes to config/cache/output are allowed. Bump the version and clear `~/.decant/cache/`.
 - **JS execution sandboxing tricks.** Playwright is always on.
-
-## Using from Claude Code
-
-A drop-in skill lives at [`skills/decant.md`](./skills/decant.md). Copy it to wherever your Claude Code installation reads skills from:
-
-```bash
-cp skills/decant.md ~/.claude/skills/decant.md
-```
-
-The skill teaches Claude when to reach for `decant` instead of `WebFetch`, how to invoke it (extract / summary / both modes, multi-URL batching), how to parse the JSON output, and how to handle each error code.
 
 ## Development
 
