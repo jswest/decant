@@ -173,6 +173,36 @@ For each URL, in order:
 
 URLs are processed strictly sequentially. No `--parallel` flag in v0.
 
+## Soft-404 detection
+
+A "soft 404" is a page that returns HTTP 200 but doesn't represent the requested resource — typically an SPA route handler that renders the landing page (or some error stub) without setting a 4xx status. The fetch pipeline can't tell the difference; we surface a verdict in `meta.soft_404` and let the caller decide.
+
+`meta.soft_404` is always present on successful responses. Shape:
+
+```json
+"soft_404": {
+  "verdict": "likely" | "possible" | "unlikely",
+  "reasons": ["title_contains_404", "canonical_mismatch", "extract_too_short"]
+}
+```
+
+Three signals, evaluated in order:
+
+1. **`title_contains_404`** — page title contains (case-insensitive) `"404"`, `"not found"`, or `"doesn't exist"`. Strong signal.
+2. **`canonical_mismatch`** — `<link rel="canonical">` or `<meta property="og:url">` declares a URL whose normalized host+path differs from the page's `final_url`. Normalization ignores scheme, trailing slash, query string, and fragment. Strong signal.
+3. **`extract_too_short`** — extracted markdown is shorter than 200 characters (after stripping). Soft signal. Threshold is fixed in v0.
+
+Verdict:
+- `likely` — any strong signal tripped
+- `possible` — only soft signals tripped
+- `unlikely` — no signals tripped (`reasons: []`)
+
+`reasons` is always reported in stable order (title → canonical → short) so callers can pattern-match exact lists.
+
+**Non-goal:** Decant does not auto-error on `soft_404: likely`. The verdict is informational; calling agents decide whether to warn, retry, or proceed. A `--strict-404` flag may land in a future version if a real caller asks.
+
+**Known limitation:** sites that serve identical content at unmatched routes *and* expose no canonical, og:url, or title differentiation are undetectable by these signals. Per-host fingerprinting is out of scope.
+
 ## Caching
 
 - **Location:** `~/.decant/cache/` (one JSON file per entry).
@@ -224,7 +254,11 @@ Non-negotiable, hardcoded:
     "ollama_ms": 4521,
     "cached": false,
     "robots_checked": true,
-    "model": "qwen3:32b"
+    "model": "qwen3:32b",
+    "soft_404": {
+      "verdict": "unlikely",
+      "reasons": []
+    }
   }
 }
 ```

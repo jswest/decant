@@ -136,6 +136,30 @@ For multi-URL runs, iterate the array:
 
     decant url <URL1> <URL2> | jq -r '.[] | .title + " — " + .url'
 
+## Watch for soft 404s
+
+Every `decant url` response includes `meta.soft_404.verdict`. Check it
+before trusting the result, especially when the page came from a
+documentation site, an SPA, or any URL the user typed from memory.
+
+- **`unlikely`** — proceed normally.
+- **`possible`** — only `extract_too_short` tripped. The page rendered
+  but came back near-empty. Could be a real stub page, a paywalled
+  article, or a JS-only app that didn't finish hydrating. Mention this
+  to the user before drawing strong conclusions from the content.
+- **`likely`** — a strong signal tripped. Treat the result as suspect.
+  Typical follow-ups:
+  - If `title_contains_404`: tell the user the page returned a 404 in
+    disguise. Don't quote its content as if it answers their question.
+  - If `canonical_mismatch`: the site rendered something other than
+    what you requested. Show the user what was actually fetched
+    (`final_url` or the canonical URL from the page) and ask whether
+    they want that, or try a different URL.
+
+Quick jq pattern:
+
+    decant url <URL> | jq -r '.meta.soft_404 | "\(.verdict): \(.reasons | join(", "))"'
+
 ## Errors
 
 Errors come back as JSON objects with a `code` field instead of a

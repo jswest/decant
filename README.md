@@ -77,7 +77,11 @@ Output is a single JSON object on stdout:
     "extract_ms": 56,
     "cached": false,
     "robots_checked": true,
-    "model": "qwen3:32b"
+    "model": "qwen3:32b",
+    "soft_404": {
+      "verdict": "unlikely",
+      "reasons": []
+    }
   }
 }
 ```
@@ -189,6 +193,20 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 | `--no-cache` | Bypass cache for both read and write. |
 | `--timeout SECONDS` | Per-URL fetch timeout (default from `fetch.request_timeout_s`). |
 | `--verbose` | Emit per-stage timings on stderr. |
+
+### Soft-404 detection
+
+Every successful response carries a `meta.soft_404` verdict so callers can spot pages that returned HTTP 200 but didn't actually serve the requested resource — e.g. an SPA rendering the landing page at an unmatched route. Three signals: a 404-ish title, a `<link rel=canonical>`/`<meta og:url>` whose host+path disagrees with `final_url`, or an extracted body shorter than 200 chars.
+
+```json
+"soft_404": { "verdict": "likely", "reasons": ["canonical_mismatch"] }
+```
+
+- `likely` — any strong signal (title or canonical) tripped. Treat the result with suspicion.
+- `possible` — only the soft signal (short extract) tripped. Worth double-checking.
+- `unlikely` — no signals; `reasons` is empty.
+
+Decant does **not** auto-error on `likely` — the verdict is advisory. Calling agents decide what to do (warn the user, try a different URL, etc.).
 
 ### Cache
 
