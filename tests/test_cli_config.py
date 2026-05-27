@@ -33,10 +33,11 @@ def test_config_interactive_writes_file(patched_paths, monkeypatch):
     cfg_path, cache_dir = patched_paths
     monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
 
+    # Prompts: email, ollama host, model, cache TTL, brave key (skipped).
     result = CliRunner().invoke(
         main,
         ["config"],
-        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n",
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "alice@example.com" in cfg_path.read_text()
@@ -49,7 +50,20 @@ def test_config_re_prompts_on_bad_email(patched_paths, monkeypatch):
     result = CliRunner().invoke(
         main,
         ["config"],
-        input="not-an-email\nalice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n",
+        input="not-an-email\nalice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "Not a plausible email" in result.output
+
+
+def test_config_persists_brave_api_key(patched_paths, monkeypatch):
+    cfg_path, _ = patched_paths
+    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+
+    result = CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\nbrv-abc123\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "brv-abc123" in cfg_path.read_text()
