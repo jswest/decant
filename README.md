@@ -215,6 +215,16 @@ Non-negotiable, hardcoded:
 - **Backwards compatibility with itself.** Pre-1.0: breaking changes to config/cache/output are allowed. Bump the version and clear `~/.decant/cache/`.
 - **JS execution sandboxing tricks.** Playwright is always on.
 
+## Using from Claude Code
+
+A drop-in skill lives at [`skills/decant.md`](./skills/decant.md). Copy it to wherever your Claude Code installation reads skills from:
+
+```bash
+cp skills/decant.md ~/.claude/skills/decant.md
+```
+
+The skill teaches Claude when to reach for `decant` instead of `WebFetch`, how to invoke it (extract / summary / both modes, multi-URL batching), how to parse the JSON output, and how to handle each error code.
+
 ## Development
 
 ```bash
