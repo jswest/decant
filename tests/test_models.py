@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from decant.models import DistillResult, ErrorCode, Finding
+from decant.models import DistillResult, ErrorCode, Finding, SearchResult
 
 
 def test_finding_rejects_unknown_relevance():
@@ -44,4 +44,16 @@ def test_error_code_values_match_spec():
         "ollama_timeout",
         "ollama_bad_json",
         "config_missing",
+        "search_no_api_key",
+        "search_unauthorized",
+        "search_rate_limited",
+        "search_unavailable",
+        "search_bad_query",
     }
+
+
+def test_search_result_age_nullable():
+    r = SearchResult(
+        url="https://x.com", title="t", hostname="x.com", age=None, snippets=[]
+    )
+    assert r.age is None

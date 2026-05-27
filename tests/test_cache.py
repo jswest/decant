@@ -17,6 +17,18 @@ def test_key_differs_per_question_and_model():
     assert base != cache.cache_key("https://x.com", "summary", "q1", "qwen3:70b")
 
 
+def test_search_key_differs_per_input():
+    base = cache.search_cache_key("qwen3", 10, None, "us", "en", 4096)
+    # Stability is implicit: the comparisons below would all fail on a
+    # non-deterministic key.
+    assert base != cache.search_cache_key("qwen4", 10, None, "us", "en", 4096)
+    assert base != cache.search_cache_key("qwen3", 20, None, "us", "en", 4096)
+    assert base != cache.search_cache_key("qwen3", 10, "pw", "us", "en", 4096)
+    assert base != cache.search_cache_key("qwen3", 10, None, "uk", "en", 4096)
+    assert base != cache.search_cache_key("qwen3", 10, None, "us", "fr", 4096)
+    assert base != cache.search_cache_key("qwen3", 10, None, "us", "en", 8192)
+
+
 def test_write_then_read_flips_cached_meta(tmp_path):
     key = "abc"
     payload = {"url": "https://x.com", "meta": {"cached": False}}

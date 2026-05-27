@@ -1,10 +1,10 @@
 ---
 name: decant
 description: |
-  Fetch URLs through the local `decant` CLI instead of WebFetch. Returns
-  clean markdown or LLM-distilled findings rather than raw HTML, saving
-  10k–50k context tokens per page. Reach for this whenever the user
-  hands you a URL.
+  Fetch URLs (and search the web) through the local `decant` CLI instead
+  of WebFetch. Returns clean markdown, LLM-distilled findings, or
+  Brave-LLM-Context search results — all in compact JSON. Reach for this
+  whenever the user hands you a URL or asks you to look something up.
 ---
 
 # decant
@@ -16,8 +16,11 @@ have to load the full HTML into your context window.
 
 ## When to use
 
-Use it whenever the user gives you a URL — to read documentation, dig
-into an article, gather supporting context for a coding task, etc.
+- **User gives you a URL** → use `decant url`. Documentation, articles,
+  context for a coding task.
+- **User asks you to find, search, or research something** without
+  naming a specific page → use `decant search` to triage candidate URLs,
+  then `decant url` on the ones worth reading.
 
 Don't use it for:
 - File paths, local docs, or anything that isn't an `http`/`https` URL.
@@ -75,6 +78,51 @@ invocation so they share a browser context.
 - `--model MODEL` — override the default Ollama model for this run.
 - `--timeout SECONDS` — per-URL fetch ceiling.
 
+## Searching the web
+
+When the user asks you to find something rather than read a specific
+URL, use `decant search` to get candidate URLs, then `decant url` on
+the promising ones.
+
+    decant search "<query>"
+
+Output has `.results[]` with `url`, `title`, `hostname`, `age`, and
+`snippets[]` per item.
+
+**The canonical two-step pattern:**
+
+    # 1. Triage
+    decant search "qwen3 license terms"
+
+    # 2. Read the URLs that look promising
+    decant url <URL1> <URL2> --question "<the user's actual question>"
+
+Guidance:
+- **Use search snippets for triage, not for the final answer.** The
+  default `--token-budget` (4096) gives you enough to pick which URLs
+  are worth a full read; it's not enough to skip the second step. Don't
+  raise `--token-budget` unless the user explicitly asks for more.
+- **Pick 2–4 URLs to follow up on**, not 10. Each `decant url` fetch
+  costs real time.
+- **Don't fall back to web scraping** if search fails. Tell the user
+  what went wrong.
+
+Search-specific flags worth knowing:
+- `--top N` — max URLs returned (default 10).
+- `--freshness pd|pw|pm|py|<range>` — useful when the user asks about
+  recent events. `pd`=past day, `pw`=past week, `pm`=past month,
+  `py`=past year.
+- `--country XX`, `--lang xx` — override defaults when the query is
+  region/language-specific.
+
+Search-specific errors:
+- `search_no_api_key` — no Brave key configured. Tell the user to run
+  `decant config` and add one, or set `BRAVE_SEARCH_API_KEY`.
+- `search_rate_limited` — wait the `details.retry_after` seconds and
+  retry (Brave's free tier allows 1 req/sec).
+- `search_bad_query` — the query is too long, too many words, or empty.
+  Trim it and retry.
+
 ## Reading the output
 
 Parse with `jq` (or any JSON tool). Examples:
@@ -82,6 +130,7 @@ Parse with `jq` (or any JSON tool). Examples:
     decant url <URL> | jq -r .extract.markdown
     decant url <URL> --question "..." | jq -r .summary.answer
     decant url <URL> --question "..." | jq '.summary.findings[] | "\(.relevance): \(.quote)"'
+    decant search "..." | jq -r '.results[] | .title + " — " + .url'
 
 For multi-URL runs, iterate the array:
 
@@ -118,6 +167,8 @@ Errors come back as JSON objects with a `code` field instead of a
     decant url <URL> --question "..."             # LLM findings
     decant url <URL> --question "..." --mode both # both
     decant url <URL1> <URL2> <URL3>               # batch (sequential)
+    decant search "<query>"                       # find candidate URLs
+    decant search "<q>" --top 5 --freshness pw    # narrower, recent-only
     decant cache stats                            # inspect cache
     decant cache clear                            # wipe cache
     decant version                                # version + paths

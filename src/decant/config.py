@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -35,11 +36,21 @@ class FetchConfig(BaseModel):
     )
 
 
+class SearchConfig(BaseModel):
+    brave_api_key: str | None = None
+    ttl_hours: int = 1
+    default_top: int = 10
+    default_token_budget: int = 4096
+    default_country: str = "us"
+    default_lang: str = "en"
+
+
 class Config(BaseModel):
     contact_email: str
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     fetch: FetchConfig = Field(default_factory=FetchConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
 
     @field_validator("contact_email")
     @classmethod
@@ -55,6 +66,8 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigMissingError(str(path))
     with path.open() as f:
         data = yaml.safe_load(f) or {}
+    if env_key := os.environ.get("BRAVE_SEARCH_API_KEY"):
+        data.setdefault("search", {})["brave_api_key"] = env_key
     return Config.model_validate(data)
 
 

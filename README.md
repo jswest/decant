@@ -98,6 +98,61 @@ uv run decant url https://a.com https://b.com https://c.com
 
 URLs are fetched sequentially (no parallelism — see [polite scraping](#polite-scraping-policy)). The output is a JSON array in the same order as the arguments. Exit code is non-zero if **any** URL errored.
 
+### Search the web (Brave LLM Context API)
+
+```bash
+uv run decant search "qwen3 license terms"
+```
+
+Hits Brave's LLM Context API and returns a JSON payload of URLs + pre-extracted snippets — input for the orchestrator, not an end product. The intended flow is two steps:
+
+```bash
+# 1. Find candidate URLs
+uv run decant search "qwen3 license terms"
+
+# 2. Pick the ones worth reading and pipe into decant url
+uv run decant url https://huggingface.co/Qwen/Qwen3-32B https://qwenlm.github.io/blog \
+  --question "What are the license terms for Qwen3?"
+```
+
+The output schema:
+
+```json
+{
+  "query": "qwen3 license terms",
+  "fetched_at": "2026-05-26T12:34:56Z",
+  "results": [
+    {
+      "url": "https://...",
+      "title": "...",
+      "hostname": "example.com",
+      "age": "2025-11-03",
+      "snippets": ["...", "..."]
+    }
+  ],
+  "meta": {
+    "brave_ms": 412,
+    "cached": false,
+    "token_budget": 4096,
+    "result_count": 10
+  }
+}
+```
+
+Requires a Brave Search API key (set via `decant config` or the `BRAVE_SEARCH_API_KEY` env var). Without one, the command errors with `search_no_api_key`.
+
+Search-specific flags:
+
+| Flag | Description |
+| --- | --- |
+| `--top N` | Max URLs (Brave `maximum_number_of_urls`). Default 10. |
+| `--token-budget N` | Brave `maximum_number_of_tokens` ceiling on the whole response. Default 4096 — sized for triage, not for skipping the second step. |
+| `--freshness pd\|pw\|pm\|py\|<range>` | Passthrough to Brave. |
+| `--country XX`, `--lang xx` | Per-call overrides for the configured defaults. |
+| `--no-cache` | Bypass cache for both read and write. |
+
+Search results have their own cache TTL (default 1 hour, separate from page-extract TTL — search results stale faster). The same `decant cache stats|clear` commands cover both keyspaces.
+
 ### Flags
 
 | Flag | Description |
@@ -148,6 +203,14 @@ fetch:
     - image
     - font
     - media
+
+search:
+  brave_api_key: brv-...                 # optional; BRAVE_SEARCH_API_KEY env var overrides
+  ttl_hours: 1                           # search results stale faster than page extracts
+  default_top: 10
+  default_token_budget: 4096
+  default_country: us
+  default_lang: en
 ```
 
 The User-Agent is not configurable. It is built from `contact_email` and the package version: `Decant/<version> (+mailto:<contact_email>)`.
@@ -195,6 +258,11 @@ The closed set of codes:
 | `ollama_timeout` | `/api/chat` exceeded `ollama.request_timeout_s`. |
 | `ollama_bad_json` | Model returned non-JSON or off-schema JSON after one retry. |
 | `config_missing` | No `~/.decant/config.yaml` — run `decant config`. |
+| `search_no_api_key` | `decant search` ran without a Brave key configured. |
+| `search_unauthorized` | Brave returned 401/403. Check the API key. |
+| `search_rate_limited` | Brave returned 429. `details.retry_after` carries seconds if Brave provided it. |
+| `search_unavailable` | Network failure, timeout, 5xx, or other Brave error. |
+| `search_bad_query` | Query failed length/word-count validation, or Brave returned 400/422. |
 
 Progress messages (e.g. `Fetching https://...` under `--verbose`) go to stderr.
 

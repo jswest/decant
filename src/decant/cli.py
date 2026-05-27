@@ -31,6 +31,13 @@ from decant.extract import ExtractEmptyError, extract as extract_html
 from decant.fetch import FetchFailedError, Fetcher
 from decant.models import ErrorCode
 from decant.robots import RobotsCache
+from decant.search import (
+    SearchBadQueryError,
+    SearchRateLimitedError,
+    SearchUnauthorizedError,
+    SearchUnavailableError,
+    search,
+)
 from decant.ua import build_user_agent
 
 
@@ -67,12 +74,19 @@ def config_cmd() -> None:
         default=existing.cache.ttl_hours if existing else 24,
         type=int,
     )
+    brave_key = click.prompt(
+        "Brave Search API key (optional, leave blank to skip)",
+        default=existing.search.brave_api_key if existing else "",
+        show_default=False,
+        hide_input=True,
+    ).strip()
 
     cfg = Config.model_validate(
         {
             "contact_email": email,
             "ollama": {"host": host, "model": model},
             "cache": {"ttl_hours": ttl},
+            "search": {"brave_api_key": brave_key or None},
         }
     )
     save_config(cfg)
@@ -144,6 +158,130 @@ def version_cmd() -> None:
         "cache_dir": str(CACHE_DIR),
     }
     click.echo(json.dumps(payload))
+
+
+# ---------------------------------------------------------------------------
+# decant search — Brave LLM Context API
+# ---------------------------------------------------------------------------
+
+
+@main.command("search")
+@click.argument("body")
+@click.option("--top", type=int, default=None, help="Max URLs (default from config).")
+@click.option("--freshness", default=None, help="Brave freshness filter (pd|pw|pm|py|range).")
+@click.option("--country", default=None, help="Override default_country for this run.")
+@click.option("--lang", default=None, help="Override default_lang for this run.")
+@click.option(
+    "--token-budget",
+    "token_budget",
+    type=int,
+    default=None,
+    help="Brave maximum_number_of_tokens (default from config).",
+)
+@click.option("--no-cache", is_flag=True, help="Bypass cache read and write.")
+def search_cmd(
+    body: str,
+    top: int | None,
+    freshness: str | None,
+    country: str | None,
+    lang: str | None,
+    token_budget: int | None,
+    no_cache: bool,
+) -> None:
+    """Hit Brave's LLM Context API; emit JSON whose URLs feed into `decant url`."""
+    try:
+        cfg = load_config()
+    except ConfigMissingError:
+        _emit_config_missing_and_exit()
+
+    api_key = cfg.search.brave_api_key
+    if not api_key:
+        click.echo(
+            json.dumps(
+                {
+                    "query": body,
+                    "error": "No Brave API key. Set it via `decant config` or BRAVE_SEARCH_API_KEY.",
+                    "code": ErrorCode.SEARCH_NO_API_KEY.value,
+                }
+            )
+        )
+        sys.exit(1)
+
+    top = top or cfg.search.default_top
+    token_budget = token_budget or cfg.search.default_token_budget
+    country = country or cfg.search.default_country
+    lang = lang or cfg.search.default_lang
+
+    key = cache_mod.search_cache_key(body, top, freshness, country, lang, token_budget)
+    if not no_cache:
+        hit = cache_mod.read(key, cfg.search.ttl_hours, CACHE_DIR)
+        if hit is not None:
+            click.echo(json.dumps(hit, indent=2))
+            return
+
+    payload = asyncio.run(
+        _run_search(api_key, body, top, token_budget, freshness, country, lang)
+    )
+    if "error" in payload:
+        click.echo(json.dumps(payload, indent=2))
+        sys.exit(1)
+
+    if not no_cache:
+        cache_mod.write(key, payload, CACHE_DIR)
+    click.echo(json.dumps(payload, indent=2))
+
+
+async def _run_search(
+    api_key: str,
+    body: str,
+    top: int,
+    token_budget: int,
+    freshness: str | None,
+    country: str,
+    lang: str,
+) -> dict:
+    async with httpx.AsyncClient() as client:
+        try:
+            flattened, brave_ms = await search(
+                client,
+                api_key,
+                body,
+                top=top,
+                token_budget=token_budget,
+                freshness=freshness,
+                country=country,
+                lang=lang,
+            )
+        except SearchBadQueryError as e:
+            return _search_error(body, ErrorCode.SEARCH_BAD_QUERY, str(e))
+        except SearchUnauthorizedError as e:
+            return _search_error(body, ErrorCode.SEARCH_UNAUTHORIZED, str(e))
+        except SearchRateLimitedError as e:
+            details = {"retry_after": e.retry_after} if e.retry_after else None
+            return _search_error(body, ErrorCode.SEARCH_RATE_LIMITED, str(e), details)
+        except SearchUnavailableError as e:
+            return _search_error(body, ErrorCode.SEARCH_UNAVAILABLE, str(e))
+
+    return {
+        "query": body,
+        "fetched_at": _now_iso(),
+        "results": flattened["results"],
+        "meta": {
+            "brave_ms": brave_ms,
+            "cached": False,
+            "token_budget": token_budget,
+            "result_count": len(flattened["results"]),
+        },
+    }
+
+
+def _search_error(
+    query: str, code: ErrorCode, message: str, details: dict | None = None
+) -> dict:
+    payload: dict = {"query": query, "error": message, "code": code.value}
+    if details:
+        payload["details"] = details
+    return payload
 
 
 # ---------------------------------------------------------------------------
