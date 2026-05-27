@@ -86,9 +86,15 @@ def config_cmd() -> None:
         default=existing.cache.ttl_hours if existing else 24,
         type=int,
     )
+    existing_brave_key = existing.search.brave_api_key if existing else None
+    brave_prompt = (
+        "Brave Search API key (press Enter to keep saved value)"
+        if existing_brave_key
+        else "Brave Search API key (optional, leave blank to skip)"
+    )
     brave_key = click.prompt(
-        "Brave Search API key (optional, leave blank to skip)",
-        default=existing.search.brave_api_key if existing else "",
+        brave_prompt,
+        default=existing_brave_key or "",
         show_default=False,
         hide_input=True,
     ).strip()
