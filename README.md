@@ -126,7 +126,15 @@ Returns the markdown *and* the summary in one response.
 uv run decant url https://a.com https://b.com https://c.com
 ```
 
-URLs are fetched sequentially (no parallelism — see [polite scraping](#polite-scraping-policy)). The output is a JSON array in the same order as the arguments. Exit code is non-zero if **any** URL errored.
+URLs are fetched sequentially (no parallelism — see [polite scraping](#polite-scraping-policy)). The output is a JSON array in the same order as the arguments. In batch mode a summary line is printed to stderr (`2 succeeded, 1 failed (run completed in 3.4s)`), and the exit code follows this table:
+
+| Scenario | Default | With `--allow-partial` |
+| --- | --- | --- |
+| All URLs succeeded | 0 | 0 |
+| Some succeeded, some failed | 1 | 0 |
+| All URLs failed | 1 | 1 |
+
+Default fail-strict is safer for automation. Use `--allow-partial` when one bad URL shouldn't kill downstream shell-pipeline work.
 
 ### Search the web (Brave LLM Context API)
 
@@ -192,6 +200,7 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 | `--model MODEL` | Override the configured Ollama model for this run. |
 | `--no-cache` | Bypass cache for both read and write. |
 | `--timeout SECONDS` | Per-URL fetch timeout (default from `fetch.request_timeout_s`). |
+| `--allow-partial` | In batch mode, exit 0 if at least one URL succeeded. No effect on single-URL runs. |
 | `--verbose` | Emit per-stage timings on stderr. |
 
 ### Soft-404 detection
