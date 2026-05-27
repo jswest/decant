@@ -108,6 +108,11 @@ Returns Ollama-distilled findings instead of raw markdown:
         "relevance": "high"
       }
     ]
+  },
+  "meta": {
+    "...": "...",
+    "model": "qwen3:32b",
+    "tier": "accurate"
   }
 }
 ```
@@ -198,10 +203,26 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 | `--question "..."` | Research question. Required for `--mode summary` or `--mode both`. |
 | `--mode extract\|summary\|both` | Defaults to `extract` (no question) or `summary` (with question). |
 | `--model MODEL` | Override the configured Ollama model for this run. |
+| `--fast` | Use `ollama.fast_model` instead of the default. Ignored when `--model` is also passed. Errors if no `fast_model` is configured. |
 | `--no-cache` | Bypass cache for both read and write. |
 | `--timeout SECONDS` | Per-URL fetch timeout (default from `fetch.request_timeout_s`). |
 | `--allow-partial` | In batch mode, exit 0 if at least one URL succeeded. No effect on single-URL runs. |
 | `--verbose` | Emit per-stage timings on stderr. |
+
+### Fast vs. accurate model tiers
+
+`decant` knows two model slots: `ollama.model` (the accurate default) and `ollama.fast_model` (optional, smaller/cheaper). The intended pattern is "use the fast model on most pages, reach for the accurate one when it matters."
+
+Resolution order, per call:
+
+1. `--model X` → use `X` (`meta.tier == "explicit"`).
+2. `--fast` and `fast_model` set → use `fast_model` (`meta.tier == "fast"`).
+3. `--fast` and `fast_model` unset → exits non-zero with `config_missing_fast_model`.
+4. Otherwise → use `ollama.model` (`meta.tier == "accurate"`).
+
+`meta.tier` is reported on `summary` and `both` responses alongside `meta.model`, so callers can pattern-match without parsing the model string. Extract mode doesn't call Ollama, so `tier` is omitted there.
+
+Configure the fast model interactively (`decant config` will prompt for it) or by editing `~/.decant/config.yaml` directly.
 
 ### Soft-404 detection
 
@@ -249,6 +270,7 @@ contact_email: john@example.com         # required, embedded in User-Agent
 ollama:
   host: http://localhost:11434
   model: qwen3:32b
+  fast_model: qwen3:8b                   # optional; enables `--fast`
   request_timeout_s: 300
 
 cache:
@@ -316,6 +338,7 @@ The closed set of codes:
 | `ollama_timeout` | `/api/chat` exceeded `ollama.request_timeout_s`. |
 | `ollama_bad_json` | Model returned non-JSON or off-schema JSON after one retry. |
 | `config_missing` | No `~/.decant/config.yaml` — run `decant config`. |
+| `config_missing_fast_model` | `--fast` was passed but `ollama.fast_model` is unset. Set it via `decant config` or pass `--model X` explicitly. |
 | `search_no_api_key` | `decant search` ran without a Brave key configured. |
 | `search_unauthorized` | Brave returned 401/403. Check the API key. |
 | `search_rate_limited` | Brave returned 429. `details.retry_after` carries seconds if Brave provided it. |

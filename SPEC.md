@@ -32,8 +32,9 @@ Prompts:
 1. **Contact email** (required) — embedded in the User-Agent string so site operators can reach you. No default. Validated as a plausible email.
 2. **Ollama host** (default `http://localhost:11434`).
 3. **Ollama model** (default: first model returned by `ollama list`, else prompts blindly). Validated by hitting `/api/tags` on the host.
-4. **Cache TTL hours** (default `24`).
-5. **Brave Search API key** (optional, skip with blank input). Hidden input. Stored under `search.brave_api_key`. The `BRAVE_SEARCH_API_KEY` env var, if set, overrides the file value at load time.
+4. **Fast Ollama model** (optional, skip with blank input). Stored under `ollama.fast_model`. Enables the `--fast` flag on `decant url`. Same `/api/tags` listing as the main model prompt.
+5. **Cache TTL hours** (default `24`).
+6. **Brave Search API key** (optional, skip with blank input). Hidden input. Stored under `search.brave_api_key`. The `BRAVE_SEARCH_API_KEY` env var, if set, overrides the file value at load time.
 
 Writes `~/.decant/config.yaml`. Creates `~/.decant/cache/` if missing. Idempotent — running it again lets you re-edit.
 
@@ -48,8 +49,18 @@ Flags:
   - `summary`: returns structured findings from Ollama; omits the raw markdown.
   - `both`: returns markdown **and** Ollama findings.
 - `--model MODEL` — override the configured Ollama model for this run.
+- `--fast` — use `ollama.fast_model` instead of the default. Ignored when `--model` is also passed (explicit wins). Errors with `config_missing_fast_model` if no `fast_model` is configured.
 - `--no-cache` — bypass cache for both read and write on this run.
 - `--timeout SECONDS` — per-URL hard ceiling (default 60s for fetch, 300s for Ollama).
+
+**Model resolution order**, per call:
+
+1. `--model X` → use `X`, `meta.tier == "explicit"`.
+2. `--fast` and `ollama.fast_model` set → use `fast_model`, `meta.tier == "fast"`.
+3. `--fast` and `ollama.fast_model` unset → `config_missing_fast_model` error.
+4. Otherwise → use `ollama.model`, `meta.tier == "accurate"`.
+
+`meta.tier` is reported on `summary`/`both` responses (alongside `meta.model`). Extract mode doesn't call Ollama, so `tier` is omitted there.
 
 Output:
 - Single URL → one JSON object on stdout.
@@ -125,6 +136,7 @@ contact_email: john@example.com         # required, embedded in User-Agent
 ollama:
   host: http://localhost:11434
   model: qwen3:32b                       # name as it appears in `ollama list`
+  fast_model: qwen3:8b                   # optional; enables the `--fast` flag
   request_timeout_s: 300                 # ceiling for a single /api/chat call
 
 cache:
@@ -258,6 +270,7 @@ Non-negotiable, hardcoded:
     "cached": false,
     "robots_checked": true,
     "model": "qwen3:32b",
+    "tier": "accurate",
     "soft_404": {
       "verdict": "unlikely",
       "reasons": []
@@ -269,7 +282,8 @@ Non-negotiable, hardcoded:
 Notes:
 - `mode == "summary"`: `extract.markdown` is omitted to keep the response compact; `extract.extractor` and `extract.char_count` are still returned so the caller knows what Ollama saw.
 - `mode == "both"`: both `extract.markdown` and `summary` are present.
-- `mode == "extract"`: `summary` is omitted; `ollama_ms` is absent from `meta`.
+- `mode == "extract"`: `summary` is omitted; `ollama_ms` and `tier` are absent from `meta`.
+- `meta.tier` ∈ `{"fast", "accurate", "explicit"}`. See the resolution table under `decant url`.
 
 ### Error
 
@@ -291,6 +305,7 @@ Codes (closed set):
 - `ollama_timeout` — `/api/chat` exceeded `ollama.request_timeout_s`.
 - `ollama_bad_json` — model returned non-JSON or JSON that did not match the schema, even after one retry.
 - `config_missing` — no `~/.decant/config.yaml` (run `decant config` first).
+- `config_missing_fast_model` — `--fast` was passed but `ollama.fast_model` is unset. Run `decant config` to set it, or pass `--model X` explicitly.
 - `search_no_api_key` — `decant search` invoked without a Brave key in config or env.
 - `search_unauthorized` — Brave returned 401 or 403.
 - `search_rate_limited` — Brave returned 429. `details.retry_after` carries the parsed `Retry-After` header in seconds, if any.
