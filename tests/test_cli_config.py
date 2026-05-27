@@ -73,6 +73,57 @@ def test_config_persists_brave_api_key(patched_paths, monkeypatch):
     assert "brv-abc123" in cfg_path.read_text()
 
 
+def test_config_rerun_keeps_brave_api_key(patched_paths, monkeypatch):
+    cfg_path, _ = patched_paths
+    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+
+    CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\nbrv-abc123\n",
+    )
+    assert "brv-abc123" in cfg_path.read_text()
+
+    result = CliRunner().invoke(main, ["config"], input="\n\n\n\n\n\n")
+    assert result.exit_code == 0, result.output
+    assert "brv-abc123" in cfg_path.read_text()
+    assert "press Enter to keep" in result.output
+
+
+def test_config_rerun_without_brave_key_does_not_loop(patched_paths, monkeypatch):
+    cfg_path, _ = patched_paths
+    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+
+    CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\n\n",
+    )
+
+    result = CliRunner().invoke(main, ["config"], input="\n\n\n\n\n\n")
+    assert result.exit_code == 0, result.output
+    assert "brave_api_key: null" in cfg_path.read_text()
+
+
+def test_config_rerun_replaces_brave_api_key_when_new_value_entered(
+    patched_paths, monkeypatch
+):
+    cfg_path, _ = patched_paths
+    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+
+    CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\nbrv-old\n",
+    )
+
+    result = CliRunner().invoke(main, ["config"], input="\n\n\n\n\nbrv-new\n")
+    assert result.exit_code == 0, result.output
+    contents = cfg_path.read_text()
+    assert "brv-new" in contents
+    assert "brv-old" not in contents
+
+
 def test_config_persists_fast_model_when_provided(patched_paths, monkeypatch):
     cfg_path, _ = patched_paths
     monkeypatch.setattr(
