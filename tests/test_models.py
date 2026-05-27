@@ -44,6 +44,7 @@ def test_error_code_values_match_spec():
         "ollama_timeout",
         "ollama_bad_json",
         "config_missing",
+        "config_missing_fast_model",
         "search_no_api_key",
         "search_unauthorized",
         "search_rate_limited",

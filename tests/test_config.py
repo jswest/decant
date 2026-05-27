@@ -25,7 +25,18 @@ def test_defaults_fill_for_partial_yaml(tmp_path):
     path.write_text("contact_email: bob@example.com\n")
     cfg = load_config(path)
     assert cfg.ollama.model == "qwen3:32b"
+    assert cfg.ollama.fast_model is None
     assert cfg.fetch.navigation_wait == "networkidle"
+
+
+def test_fast_model_round_trips(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "contact_email: c@d.co\n"
+        "ollama:\n  model: qwen3:32b\n  fast_model: qwen3:8b\n"
+    )
+    cfg = load_config(path)
+    assert cfg.ollama.fast_model == "qwen3:8b"
 
 
 @pytest.mark.parametrize("bad", ["not-an-email", "alice@", "@example.com", "alice"])

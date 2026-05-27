@@ -28,6 +28,14 @@ def patched_paths(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def patched_paths_with_fast(patched_paths):
+    """patched_paths variant where ollama.fast_model is set in config."""
+    cfg_path, _ = patched_paths
+    cfg_path.write_text(cfg_path.read_text() + "  fast_model: qwen3:8b\n")
+    return patched_paths
+
+
+@pytest.fixture
 def stub_pipeline(monkeypatch):
     """Replace fetch/extract/distill with deterministic stubs."""
 
@@ -378,3 +386,101 @@ def test_projections_do_not_mutate_input():
     assert "summary" in src
     assert "markdown" in src["extract"]
     assert "ollama_ms" in src["meta"]
+
+
+# --- Model tier resolution: --fast / --model / meta.tier --------------------
+
+
+def test_summary_default_tier_is_accurate(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "what?"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "accurate"
+    assert payload["meta"]["model"] == "qwen3:32b"
+
+
+def test_extract_mode_omits_tier(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(main, ["url", "https://example.com"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "tier" not in payload["meta"]
+
+
+def test_fast_flag_uses_fast_model(patched_paths_with_fast, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "Q?", "--fast"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "fast"
+    assert payload["meta"]["model"] == "qwen3:8b"
+
+
+def test_fast_flag_without_fast_model_errors(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://example.com", "--question", "Q?", "--fast"]
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["code"] == "config_missing_fast_model"
+
+
+def test_explicit_model_beats_fast(patched_paths_with_fast, stub_pipeline):
+    result = CliRunner().invoke(
+        main,
+        [
+            "url",
+            "https://example.com",
+            "--question",
+            "Q?",
+            "--fast",
+            "--model",
+            "custom:1b",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "explicit"
+    assert payload["meta"]["model"] == "custom:1b"
+
+
+def test_both_mode_carries_tier(patched_paths_with_fast, stub_pipeline):
+    result = CliRunner().invoke(
+        main,
+        [
+            "url",
+            "https://example.com",
+            "--question",
+            "Q?",
+            "--mode",
+            "both",
+            "--fast",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["meta"]["tier"] == "fast"
+
+
+def test_mode_both_warm_extract_projection_omits_tier(
+    patched_paths_with_fast, stub_pipeline
+):
+    """The extract-mode cache projection must match a fresh extract run, which
+    has no `tier`. Otherwise the cache invariant breaks."""
+    url = "https://tier-projection.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(
+        main, ["url", url, "--question", "Q?", "--mode", "both", "--fast"]
+    )
+    assert r1.exit_code == 0, r1.output
+
+    r2 = runner.invoke(main, ["url", url])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["mode"] == "extract"
+    assert p2["meta"]["cached"] is True
+    assert "tier" not in p2["meta"]
+
