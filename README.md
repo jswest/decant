@@ -205,6 +205,7 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 | `--model MODEL` | Override the configured Ollama model for this run. |
 | `--fast` | Use `ollama.fast_model`. Already the default when `fast_model` is configured; useful for scripts that want to be explicit. Ignored when `--model` is also passed. Errors if no `fast_model` is configured. |
 | `--accurate` | Use `ollama.model` (the accurate tier). Opt-in for the cases where extra latency pays off. Ignored when `--model` is also passed. Mutually exclusive with `--fast`. |
+| `--terse` | Drop verbatim source quotes from summary output. Smaller and cheaper to feed back into a conversation; less auditable. Requires summary or both mode. |
 | `--no-cache` | Bypass cache for both read and write. |
 | `--timeout SECONDS` | Per-URL fetch timeout (default from `fetch.request_timeout_s`). |
 | `--allow-partial` | In batch mode, exit 0 if at least one URL succeeded. No effect on single-URL runs. |
@@ -231,6 +232,20 @@ Configure the fast model interactively (`decant config` will prompt for it) or b
 
 Before issue #23, summary mode always defaulted to `ollama.model` regardless of whether `fast_model` was configured. The default has been flipped: if `fast_model` is set, summary mode now uses it by default, and `--accurate` is the new opt-in to `ollama.model`. **This is a breaking default for users with `fast_model` configured.** If you want the old behavior, pass `--accurate` on every call, or remove `fast_model` from your config. Users without `fast_model` configured see no change. `meta.tier` already exists for callers that want to detect at runtime which tier was used.
 
+### Terse summary mode
+
+The summary mode's `findings[].quote` blocks make the answer auditable — the calling agent can show the user exactly where on the page each claim came from. They're also the biggest single contributor to summary-mode tokens. Pass `--terse` when the caller only needs the answer:
+
+```bash
+uv run decant url https://example.com/article --question "What is X?" --terse
+```
+
+The response keeps `answer`, `page_topic`, and `findings[]`, but each finding now carries only `context` and `relevance` — no verbatim text. `meta.terse: true` is set so downstream callers can detect it. The same flag is honored on `--mode both`.
+
+`--terse` plus `--fast` is the lean-and-cheap orchestrator setting; the inverse (`--accurate`, no `--terse`) is the audit/legal setting. `--terse` is rejected with `--mode extract` (extract mode doesn't call the LLM, so there's nothing to be terse about).
+
+Terse and full responses cache as separate entries, so toggling the flag never serves stale cross-mode output.
+
 ### Soft-404 detection
 
 Every successful response carries a `meta.soft_404` verdict so callers can spot pages that returned HTTP 200 but didn't actually serve the requested resource — e.g. an SPA rendering the landing page at an unmatched route. Three signals: a 404-ish title, a `<link rel=canonical>`/`<meta og:url>` whose host+path disagrees with `final_url`, or an extracted body shorter than 200 chars.
@@ -254,8 +269,8 @@ uv run decant cache clear     # {"cleared": N, "freed_bytes": M}
 
 The cache key depends on the mode:
 
-- **Summary / both:** `sha256(url + mode + question + model)` — different questions or models get separate entries.
-- **Extract:** `sha256(url + "extract")` — question and model are ignored, since the extracted markdown depends on neither.
+- **Summary / both:** `sha256(url + mode + question + model)` — different questions or models get separate entries. A `|terse` suffix is appended when `--terse` is set, so terse and full responses don't collide.
+- **Extract:** `sha256(url + "extract")` — question, model, and terse-ness are all ignored, since the extracted markdown depends on none of them.
 
 Running `--mode both` writes **three** entries — the full `both` payload plus single-mode projections — so a follow-up `--mode extract` or `--mode summary` against the same URL hits cache instead of refetching. TTL is configurable; default is 24 hours, enforced via file mtime.
 
