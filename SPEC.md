@@ -14,7 +14,7 @@ The intended caller is a coding agent (or human) who has access to a beefy local
 
 ## Non-goals
 
-- **Search.** Decant does not search the web. Callers provide URLs. (Avoids antagonizing DuckDuckGo/Brave/etc.)
+- **Scraping search engines.** Decant does not scrape DuckDuckGo/Google/Bing. It *does* ship a `decant search` subcommand backed by Brave's paid LLM Context API; that's an API call, not a scrape, and only works when the user has provided a Brave key. If Brave is unconfigured the subcommand errors with `search_no_api_key`.
 - **Crawling.** Decant fetches the URLs it is given. It does not follow links beyond ordinary HTTP redirects.
 - **Backwards compatibility with itself.** Pre-1.0: breaking config/cache/output changes are allowed; bump the version and tell users to clear `~/.decant/cache/`.
 - **JS execution sandboxing tricks.** Playwright is always on. We do not try to be clever about static-only fetches.
@@ -33,6 +33,7 @@ Prompts:
 2. **Ollama host** (default `http://localhost:11434`).
 3. **Ollama model** (default: first model returned by `ollama list`, else prompts blindly). Validated by hitting `/api/tags` on the host.
 4. **Cache TTL hours** (default `24`).
+5. **Brave Search API key** (optional, skip with blank input). Hidden input. Stored under `search.brave_api_key`. The `BRAVE_SEARCH_API_KEY` env var, if set, overrides the file value at load time.
 
 Writes `~/.decant/config.yaml`. Creates `~/.decant/cache/` if missing. Idempotent — running it again lets you re-edit.
 
@@ -53,6 +54,54 @@ Flags:
 Output:
 - Single URL → one JSON object on stdout.
 - Multiple URLs → a JSON array, in the same order as the arguments, one element per URL. Per-URL errors appear as error objects within the array; exit code is non-zero if **any** URL errored.
+
+### `decant search <body>`
+
+Hits Brave's **LLM Context API** (`/res/v1/llm/context`, launched Feb 2026) and emits JSON whose URLs can be fed back into `decant url` for full extraction.
+
+The output of `decant search` is **input for the orchestrator**, not an end product. The intended caller is a coding agent: it calls `decant search`, picks promising URLs from the snippets, then calls `decant url <those> --question "..."`. There is intentionally no `--distill` mode here — the orchestrator *is* the distill loop.
+
+Flags:
+- `--top N` — Brave `maximum_number_of_urls`. Default from `search.default_top`.
+- `--freshness pd|pw|pm|py|<range>` — passthrough to Brave.
+- `--country XX`, `--lang xx` — per-call overrides for the config defaults.
+- `--token-budget N` — Brave `maximum_number_of_tokens` (ceiling on the whole response). Default from `search.default_token_budget` (4096).
+- `--no-cache` — bypass cache for both read and write on this run.
+
+Body constraints (validated client-side before any HTTP call): 1–400 chars, ≤50 words. Out-of-range queries error with `search_bad_query` without hitting Brave.
+
+Brave's `maximum_number_of_snippets` and `maximum_number_of_snippets_per_url` are not exposed as flags in v0; the request relies on Brave's defaults.
+
+Output schema:
+
+```json
+{
+  "query": "qwen3 license",
+  "fetched_at": "2026-05-26T12:34:56Z",
+  "results": [
+    {
+      "url": "https://...",
+      "title": "...",
+      "hostname": "example.com",
+      "age": "2025-11-03",
+      "snippets": ["...", "..."]
+    }
+  ],
+  "meta": {
+    "brave_ms": 412,
+    "cached": false,
+    "token_budget": 4096,
+    "result_count": 10
+  }
+}
+```
+
+Notes:
+- Flattens Brave's `grounding.generic[]` + `sources{}` into one `results[]`. Items whose URL isn't in `sources` are dropped — this is how POI/map results are silently filtered out.
+- `age` may be `null`.
+- POI / map results are out of scope in v0.
+
+Caching: separate keyspace from URL results. Key is `sha256("search|" + query + "|" + top + "|" + freshness + "|" + country + "|" + lang + "|" + token_budget)`. TTL is `search.ttl_hours` (default `1`, since search results stale faster than page extracts). `decant cache stats` / `decant cache clear` cover search entries automatically.
 
 ### `decant cache clear`
 
@@ -89,6 +138,14 @@ fetch:
     - image
     - font
     - media
+
+search:
+  brave_api_key: brv-...                 # optional; BRAVE_SEARCH_API_KEY env var overrides
+  ttl_hours: 1                           # separate from page-cache TTL
+  default_top: 10
+  default_token_budget: 4096
+  default_country: us
+  default_lang: en
 
 # user_agent is not configurable — it is built from contact_email and version:
 #   Decant/<version> (+mailto:<contact_email>)
@@ -197,8 +254,13 @@ Codes (closed set):
 - `ollama_timeout` — `/api/chat` exceeded `ollama.request_timeout_s`.
 - `ollama_bad_json` — model returned non-JSON or JSON that did not match the schema, even after one retry.
 - `config_missing` — no `~/.decant/config.yaml` (run `decant config` first).
+- `search_no_api_key` — `decant search` invoked without a Brave key in config or env.
+- `search_unauthorized` — Brave returned 401 or 403.
+- `search_rate_limited` — Brave returned 429. `details.retry_after` carries the parsed `Retry-After` header in seconds, if any.
+- `search_unavailable` — network failure, timeout, 5xx, or any other unmapped HTTP status from Brave.
+- `search_bad_query` — query failed client-side validation (length/word count) or Brave returned 400/422.
 
-Errors print as JSON on stdout, exit code is non-zero. Progress messages (e.g. "Fetching https://..." while a batch runs) go to stderr.
+Errors print as JSON on stdout, exit code is non-zero. Progress messages (e.g. "Fetching https://..." while a batch runs) go to stderr. Search errors use the same envelope as URL errors but key the subject as `query` instead of `url`.
 
 ## Ollama prompt and structured output
 
