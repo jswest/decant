@@ -203,7 +203,8 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 | `--question "..."` | Research question. Required for `--mode summary` or `--mode both`. |
 | `--mode extract\|summary\|both` | Defaults to `extract` (no question) or `summary` (with question). |
 | `--model MODEL` | Override the configured Ollama model for this run. |
-| `--fast` | Use `ollama.fast_model` instead of the default. Ignored when `--model` is also passed. Errors if no `fast_model` is configured. |
+| `--fast` | Use `ollama.fast_model`. Already the default when `fast_model` is configured; useful for scripts that want to be explicit. Ignored when `--model` is also passed. Errors if no `fast_model` is configured. |
+| `--accurate` | Use `ollama.model` (the accurate tier). Opt-in for the cases where extra latency pays off. Ignored when `--model` is also passed. Mutually exclusive with `--fast`. |
 | `--no-cache` | Bypass cache for both read and write. |
 | `--timeout SECONDS` | Per-URL fetch timeout (default from `fetch.request_timeout_s`). |
 | `--allow-partial` | In batch mode, exit 0 if at least one URL succeeded. No effect on single-URL runs. |
@@ -211,18 +212,24 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 
 ### Fast vs. accurate model tiers
 
-`decant` knows two model slots: `ollama.model` (the accurate default) and `ollama.fast_model` (optional, smaller/cheaper). The intended pattern is "use the fast model on most pages, reach for the accurate one when it matters."
+`decant` knows two model slots: `ollama.model` (the accurate slot) and `ollama.fast_model` (optional, smaller/cheaper). The intended pattern is "fast is the default; reach for accurate when it matters." The benchmark in `docs/extraction-benchmark.md` showed the fast tier within ~5 points of recall and ~30% faster on typical pages, so the default favors the cheap path.
 
 Resolution order, per call:
 
 1. `--model X` → use `X` (`meta.tier == "explicit"`).
 2. `--fast` and `fast_model` set → use `fast_model` (`meta.tier == "fast"`).
 3. `--fast` and `fast_model` unset → exits non-zero with `config_missing_fast_model`.
-4. Otherwise → use `ollama.model` (`meta.tier == "accurate"`).
+4. `--accurate` → use `ollama.model` (`meta.tier == "accurate"`).
+5. Otherwise, if `fast_model` is set → use `fast_model` (`meta.tier == "fast"`). **(Default when a fast model is configured.)**
+6. Otherwise → use `ollama.model` (`meta.tier == "accurate"`).
 
-`meta.tier` is reported on `summary` and `both` responses alongside `meta.model`, so callers can pattern-match without parsing the model string. Extract mode doesn't call Ollama, so `tier` is omitted there.
+`--fast` and `--accurate` are mutually exclusive. `meta.tier` is reported on `summary` and `both` responses alongside `meta.model`, so callers can pattern-match without parsing the model string. Extract mode doesn't call Ollama, so `tier` is omitted there.
 
 Configure the fast model interactively (`decant config` will prompt for it) or by editing `~/.decant/config.yaml` directly.
+
+#### Migration note — default flip (issue #23)
+
+Before issue #23, summary mode always defaulted to `ollama.model` regardless of whether `fast_model` was configured. The default has been flipped: if `fast_model` is set, summary mode now uses it by default, and `--accurate` is the new opt-in to `ollama.model`. **This is a breaking default for users with `fast_model` configured.** If you want the old behavior, pass `--accurate` on every call, or remove `fast_model` from your config. Users without `fast_model` configured see no change. `meta.tier` already exists for callers that want to detect at runtime which tier was used.
 
 ### Soft-404 detection
 
@@ -270,7 +277,7 @@ contact_email: john@example.com         # required, embedded in User-Agent
 ollama:
   host: http://localhost:11434
   model: qwen3:32b
-  fast_model: qwen3:8b                   # optional; enables `--fast`
+  fast_model: qwen3:8b                   # optional; when set, becomes the summary-mode default (use --accurate to opt out)
   request_timeout_s: 300
 
 cache:

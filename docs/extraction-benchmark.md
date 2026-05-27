@@ -66,6 +66,14 @@ time decant url <URL> --question "<question>" --no-cache \
   > /tmp/bench-summary.txt
 ```
 
+> **Note (issue #23):** since the default flip, `decant url --question` hits
+> the **fast tier** when `ollama.fast_model` is configured. To benchmark the
+> accurate tier explicitly, pass `--accurate`. To compare both tiers in the
+> same pass, run the command twice — once bare, once with `--accurate` —
+> and record both rows (label the retriever `decant summary (fast)` /
+> `decant summary (accurate)`). The `meta.tier` field in the response
+> confirms which tier ran.
+
 ### 2. decant extract
 
 ```bash
