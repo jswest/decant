@@ -1,6 +1,6 @@
 # decant
 
-> Pour the clear liquid off; leave the sediment behind.
+> Clarifying the web for CLI agents.
 
 `decant` is a polite, local-first command-line tool that turns a URL into clean markdown and, optionally, a structured set of findings produced by a local LLM via Ollama.
 
