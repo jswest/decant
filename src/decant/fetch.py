@@ -4,6 +4,10 @@ A single `Fetcher` is created per `decant url` invocation and reused across
 all URLs in the batch — one Chromium process, one browser context. This
 saves ~1s per URL vs. relaunching, and a fresh context per run means
 cookies never persist across invocations (spec §"Polite scraping policy").
+
+After a page settles, Mozilla Readability.js runs inside the page context
+to capture a parsed-article object alongside the raw HTML. The article
+dict is the preferred input to the extractor chain when present.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
+
+from decant.vendor import READABILITY_JS_PATH
 
 
 class FetchFailedError(Exception):
@@ -40,6 +46,14 @@ class FetchResult:
     title: str
     html: str
     elapsed_ms: int
+    article: dict | None = None
+
+
+# Returns null on any error so callers don't need to handle JS exceptions.
+_READABILITY_PARSE_SCRIPT = """() => {
+    try { return new Readability(document.cloneNode(true)).parse(); }
+    catch { return null; }
+}"""
 
 
 def _is_retryable(status: int) -> bool:
@@ -64,6 +78,7 @@ class Fetcher:
     def __init__(self, user_agent: str, blocked_resources: list[str]) -> None:
         self._user_agent = user_agent
         self._blocked = set(blocked_resources)
+        self._readability_js = READABILITY_JS_PATH.read_text()
         self._pw = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -92,7 +107,7 @@ class Fetcher:
     async def fetch(
         self, url: str, timeout_s: int, navigation_wait: str = "networkidle"
     ) -> FetchResult:
-        """Navigate to `url` and capture (final_url, title, html).
+        """Navigate to `url` and capture (final_url, title, html, article).
 
         Retries once on 5xx and 429 with a 2s backoff; 4xx (other than 429)
         is fatal. Total wall time per attempt is bounded by `timeout_s`.
@@ -118,16 +133,23 @@ class Fetcher:
                 raise FetchFailedError(f"no response for {url}")
             if response.status >= 400:
                 raise _HTTPStatus(response.status)
-            elapsed_ms = int((time.monotonic() - start) * 1000)
-            remaining_ms = max(0, timeout_s * 1000 - elapsed_ms)
+            remaining_ms = max(
+                0, timeout_s * 1000 - int((time.monotonic() - start) * 1000)
+            )
             try:
                 await page.wait_for_load_state(navigation_wait, timeout=remaining_ms)
             except PlaywrightTimeoutError:
                 pass  # networkidle is best-effort; we already have the DOM
+            try:
+                await page.add_script_tag(content=self._readability_js)
+                article = await page.evaluate(_READABILITY_PARSE_SCRIPT)
+            except PlaywrightError:
+                article = None  # don't fail the fetch when the parse helper trips
             return FetchResult(
                 final_url=page.url,
                 title=await page.title(),
                 html=await page.content(),
+                article=article,
                 elapsed_ms=int((time.monotonic() - start) * 1000),
             )
         finally:

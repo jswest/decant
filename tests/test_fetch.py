@@ -135,6 +135,11 @@ async def test_route_handler_blocks_configured_resources():
     assert doc.actions == ["continue"]
 
 
+def test_fetcher_loads_readability_js():
+    f = Fetcher(user_agent="x", blocked_resources=[])
+    assert "function Readability" in f._readability_js
+
+
 # --- End-to-end Playwright test (gated) --------------------------------------
 
 
@@ -172,5 +177,43 @@ async def test_fetcher_end_to_end():
         assert isinstance(r, FetchResult)
         assert r.title == "Hi"
         assert "Hello" in r.html
+        # article may be None for a single-h1 page; just confirm the field exists.
+        assert r.article is None or isinstance(r.article, dict)
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.skipif(
+    os.environ.get("DECANT_E2E") != "1",
+    reason="set DECANT_E2E=1 to run (requires `playwright install chromium`)",
+)
+@pytest.mark.asyncio
+async def test_fetcher_captures_readability_article():
+    """A page with real article content should yield a parsed `article` dict."""
+    html = """
+    <html>
+    <head><title>An Article</title></head>
+    <body>
+    <article>
+    <h1>The Title</h1>
+    <p>This is a meaningful first paragraph with enough content for Readability
+    to consider it an article. Readability looks for paragraph density and
+    meaningful prose, so we need a few sentences here to pass its heuristics.</p>
+    <p>A second paragraph adds more content to ensure the article gets parsed
+    correctly. Without sufficient content, Readability.js will return null
+    rather than guess.</p>
+    <p>And a third paragraph to be safe — the heuristic threshold scales with
+    the surrounding noise on the page.</p>
+    </article>
+    </body>
+    </html>
+    """
+    url, _thread, server = _serve_once(html)
+    try:
+        async with Fetcher(user_agent="Decant/test", blocked_resources=[]) as f:
+            r = await f.fetch(url, timeout_s=10)
+        assert r.article is not None
+        assert "meaningful first paragraph" in r.article["textContent"]
+        assert r.article["length"] >= 250
     finally:
         server.shutdown()
