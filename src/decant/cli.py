@@ -5,7 +5,7 @@ import json
 import click
 import httpx
 
-from decant import __version__
+from decant import __version__, cache as cache_mod
 from decant.config import (
     CACHE_DIR,
     CONFIG_PATH,
@@ -79,6 +79,24 @@ def _list_ollama_models(host: str) -> list[str]:
         return [m["name"] for m in r.json().get("models", [])]
     except (httpx.HTTPError, ValueError, KeyError):
         return []
+
+
+@main.group("cache")
+def cache_group() -> None:
+    """Inspect or clear ~/.decant/cache/."""
+
+
+@cache_group.command("clear")
+def cache_clear_cmd() -> None:
+    """Delete cache contents. Prints {cleared, freed_bytes}."""
+    cleared, freed = cache_mod.clear(CACHE_DIR)
+    click.echo(json.dumps({"cleared": cleared, "freed_bytes": freed}))
+
+
+@cache_group.command("stats")
+def cache_stats_cmd() -> None:
+    """Print {entries, total_bytes, oldest, newest} for the cache."""
+    click.echo(json.dumps(cache_mod.stats(CACHE_DIR)))
 
 
 @main.command("version")
