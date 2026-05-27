@@ -280,10 +280,10 @@ For each URL:
 1. **Validate** the URL parses and uses an `http`/`https` scheme.
 2. **Cache lookup** (unless `--no-cache`). A hit short-circuits the rest.
 3. **robots.txt** — fetched once per host per run with our User-Agent. Parsed with [`protego`](https://github.com/scrapy/protego). Disallow is fatal for that URL.
-4. **Fetch** via headless Chromium (Playwright). Image/font/media requests are aborted at the route handler. One browser context is reused across all URLs in a batch.
-5. **Extract** with a three-tier fallback chain. First non-empty result wins:
-   1. `trafilatura` → markdown
-   2. `readability-lxml` → HTML → `markdownify`
+4. **Fetch** via headless Chromium (Playwright). Image/font/media requests are aborted at the route handler. One browser context is reused across all URLs in a batch. After the page settles, [Mozilla Readability.js](https://github.com/mozilla/readability) (vendored, runs in-browser) parses the DOM into an article dict that's the preferred input to the extractor chain. `bypass_csp=True` lets the helper script load on CSP-strict pages.
+5. **Extract** with a three-tier fallback chain. Tiers 1 and 2 gate on a 250-char length floor; tier 3 only needs non-empty output:
+   1. **Mozilla Readability.js** — `markdownify(article["content"])` when the Fetcher captured a parsed article
+   2. `trafilatura` → markdown
    3. BeautifulSoup (`main` → `article` → `[role=main]` → `body`, with script/style/nav/footer/aside stripped) → `html2text`
 6. **Distill** (only for `summary` or `both`). Markdown is sent to Ollama's `/api/chat` with the result schema passed as the `format` parameter so generation is constrained at decode time. The response is validated against the same Pydantic model. One retry on validation failure.
 7. **Compose** the result JSON per the schema above.

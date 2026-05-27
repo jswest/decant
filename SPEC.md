@@ -160,13 +160,13 @@ For each URL, in order:
 1. **Validate** — URL must parse, scheme must be `http` or `https`. Otherwise: `invalid_url`.
 2. **Cache lookup** (unless `--no-cache`) — compute key per the `Key` rule under §"Caching". If `~/.decant/cache/<key>.json` exists and `mtime` is within `cache.ttl_hours`, return cached result with `meta.cached: true`.
 3. **robots.txt** — fetch `<scheme>://<host>/robots.txt` (with our UA). Parse with `protego` (more spec-correct than stdlib `urllib.robotparser`). Cache parsed result in-process for the duration of the run. If our UA is disallowed for the path: emit `robots_disallowed` error and stop.
-4. **Playwright fetch** — headless Chromium, block image/font/media resources via route handler, wait for `domcontentloaded` then `networkidle` (cap at `fetch.request_timeout_s`). Set User-Agent. Capture `final_url`, page title, full HTML.
-5. **Extract** — three-tier fallback chain. Stop at first non-empty result:
-    1. `trafilatura.extract(html, output_format="markdown", include_links=True)`
-    2. `readability.Document(html).summary()` → HTML of main article → convert to markdown via `markdownify`
+4. **Playwright fetch** — headless Chromium, block image/font/media resources via route handler, wait for `domcontentloaded` then `networkidle` (cap at `fetch.request_timeout_s`). Set User-Agent. Capture `final_url`, page title, full HTML. After the page settles, inject the vendored [Mozilla Readability.js](https://github.com/mozilla/readability) source via `page.add_script_tag` and evaluate `new Readability(document.cloneNode(true)).parse()`. The resulting article object — or `null` — is captured on `FetchResult.article`. The browser context sets `bypass_csp=True` so the helper script is admitted on strict-CSP sites.
+5. **Extract** — three-tier fallback chain. Tiers 1 and 2 gate on `len(content) >= 250` chars; tier 3 only needs non-empty output:
+    1. **Mozilla Readability.js** — `markdownify(article["content"])` when the Fetcher captured a parsed article
+    2. `trafilatura.extract(html, output_format="markdown", include_links=True)`
     3. BeautifulSoup: select `main, article, [role=main]` (in that order, first hit wins); if none, use `body`. Strip `<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`. Pipe through `html2text`.
-    
-    Record which extractor produced the result in `meta.extractor`.
+
+    Record which extractor produced the result in `meta.extractor` (one of `readability.js`, `trafilatura`, `bs4+html2text`).
 6. **Distill** (only if mode includes summary) — POST to `<ollama.host>/api/chat`. Single user turn with the prompt below. Pass the Pydantic-derived JSON Schema as Ollama's `format` parameter so generation is constrained to the result shape at decode time. Validate the response with the same Pydantic model before returning.
 7. **Compose result JSON** per the output schema.
 8. **Cache write** (unless `--no-cache`) — write the result JSON to `~/.decant/cache/<key>.json`. Set `meta.cached: false` in the returned copy.
@@ -376,7 +376,8 @@ Retry: if Pydantic validation fails on the response, retry exactly once with the
 │       ├── cache.py            # sha256-keyed JSON file cache with TTL
 │       ├── robots.py           # protego wrapper, per-run host cache
 │       ├── fetch.py            # Playwright orchestration
-│       ├── extract.py          # trafilatura → readability → bs4+html2text
+│       ├── extract.py          # readability.js → trafilatura → bs4+html2text
+│       ├── vendor/              # vendored Mozilla Readability.js (Apache 2.0)
 │       ├── distill.py          # Ollama /api/chat client + prompt
 │       ├── models.py           # pydantic models: DistillResult drives both the
 │       │                       # /api/chat `format` schema and response validation
@@ -395,9 +396,8 @@ Minimum set, pinned in `pyproject.toml`:
 - `click` — CLI
 - `pyyaml` — config
 - `playwright` — fetch (also requires `playwright install chromium` post-install)
-- `trafilatura` — primary extractor
-- `readability-lxml` — secondary extractor
-- `markdownify` — HTML → MD bridge for the readability path
+- `trafilatura` — secondary extractor (the primary is vendored Mozilla Readability.js — runs in the Playwright page, no Python dep)
+- `markdownify` — HTML → MD bridge for the Readability.js path
 - `beautifulsoup4` + `html2text` — tertiary extractor
 - `protego` — robots.txt parser
 - `httpx` — Ollama HTTP client and robots.txt fetch
