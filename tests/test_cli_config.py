@@ -31,16 +31,20 @@ def test_version_prints_json():
 
 def test_config_interactive_writes_file(patched_paths, monkeypatch):
     cfg_path, cache_dir = patched_paths
-    monkeypatch.setattr("decant.cli._list_ollama_models", lambda host: ["qwen3:32b"])
+    monkeypatch.setattr(
+        "decant.cli._list_ollama_models", lambda host: ["qwen3:32b", "qwen3:8b"]
+    )
 
-    # Prompts: email, ollama host, model, cache TTL, brave key (skipped).
+    # Prompts: email, ollama host, model, fast model (skip), cache TTL, brave key.
     result = CliRunner().invoke(
         main,
         ["config"],
-        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n\n",
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\n\n",
     )
     assert result.exit_code == 0, result.output
-    assert "alice@example.com" in cfg_path.read_text()
+    text = cfg_path.read_text()
+    assert "alice@example.com" in text
+    assert "fast_model: null" in text
     assert cache_dir.is_dir()
 
 
@@ -50,7 +54,7 @@ def test_config_re_prompts_on_bad_email(patched_paths, monkeypatch):
     result = CliRunner().invoke(
         main,
         ["config"],
-        input="not-an-email\nalice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\n\n",
+        input="not-an-email\nalice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "Not a plausible email" in result.output
@@ -63,7 +67,22 @@ def test_config_persists_brave_api_key(patched_paths, monkeypatch):
     result = CliRunner().invoke(
         main,
         ["config"],
-        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n24\nbrv-abc123\n",
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\n\n24\nbrv-abc123\n",
     )
     assert result.exit_code == 0, result.output
     assert "brv-abc123" in cfg_path.read_text()
+
+
+def test_config_persists_fast_model_when_provided(patched_paths, monkeypatch):
+    cfg_path, _ = patched_paths
+    monkeypatch.setattr(
+        "decant.cli._list_ollama_models", lambda host: ["qwen3:32b", "qwen3:8b"]
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["config"],
+        input="alice@example.com\nhttp://localhost:11434\nqwen3:32b\nqwen3:8b\n24\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "fast_model: qwen3:8b" in cfg_path.read_text()

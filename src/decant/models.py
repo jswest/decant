@@ -13,6 +13,7 @@ class ErrorCode(str, Enum):
     OLLAMA_TIMEOUT = "ollama_timeout"
     OLLAMA_BAD_JSON = "ollama_bad_json"
     CONFIG_MISSING = "config_missing"
+    CONFIG_MISSING_FAST_MODEL = "config_missing_fast_model"
     SEARCH_NO_API_KEY = "search_no_api_key"
     SEARCH_UNAUTHORIZED = "search_unauthorized"
     SEARCH_RATE_LIMITED = "search_rate_limited"

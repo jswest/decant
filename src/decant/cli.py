@@ -70,7 +70,17 @@ def config_cmd() -> None:
         "Ollama host",
         default=existing.ollama.host if existing else "http://localhost:11434",
     )
-    model = _prompt_model(host, existing.ollama.model if existing else None)
+    available_models = _list_ollama_models(host)
+    if available_models:
+        click.echo(f"Available models on {host}: {', '.join(available_models)}")
+    else:
+        click.echo(f"(Could not reach {host}/api/tags; prompting blindly.)", err=True)
+    model = _prompt_model(
+        available_models, existing.ollama.model if existing else None
+    )
+    fast_model = _prompt_fast_model(
+        existing.ollama.fast_model if existing else None
+    )
     ttl = click.prompt(
         "Cache TTL hours",
         default=existing.cache.ttl_hours if existing else 24,
@@ -86,7 +96,7 @@ def config_cmd() -> None:
     cfg = Config.model_validate(
         {
             "contact_email": email,
-            "ollama": {"host": host, "model": model},
+            "ollama": {"host": host, "model": model, "fast_model": fast_model},
             "cache": {"ttl_hours": ttl},
             "search": {"brave_api_key": brave_key or None},
         }
@@ -104,14 +114,19 @@ def _prompt_email(default: str | None) -> str:
         click.echo("Not a plausible email; try again.", err=True)
 
 
-def _prompt_model(host: str, default: str | None) -> str:
-    models = _list_ollama_models(host)
-    if models:
-        click.echo(f"Available models on {host}: {', '.join(models)}")
-        default = default if default in models else models[0]
-    else:
-        click.echo(f"(Could not reach {host}/api/tags; prompting blindly.)", err=True)
+def _prompt_model(available_models: list[str], default: str | None) -> str:
+    if available_models and default not in available_models:
+        default = available_models[0]
     return click.prompt("Ollama model", default=default)
+
+
+def _prompt_fast_model(default: str | None) -> str | None:
+    raw = click.prompt(
+        "Fast Ollama model (optional, leave blank to skip)",
+        default=default or "",
+        show_default=bool(default),
+    ).strip()
+    return raw or None
 
 
 def _list_ollama_models(host: str) -> list[str]:
@@ -301,6 +316,11 @@ def _search_error(
     help="Output mode. Defaults to extract (no question) or summary (with question).",
 )
 @click.option("--model", default=None, help="Override the configured Ollama model.")
+@click.option(
+    "--fast",
+    is_flag=True,
+    help="Use ollama.fast_model instead of the default. Ignored if --model is set.",
+)
 @click.option("--no-cache", is_flag=True, help="Bypass cache read and write.")
 @click.option(
     "--timeout",
@@ -321,6 +341,7 @@ def url_cmd(
     question: str | None,
     mode: str | None,
     model: str | None,
+    fast: bool,
     no_cache: bool,
     timeout_override: int | None,
     allow_partial: bool,
@@ -331,11 +352,16 @@ def url_cmd(
     except ConfigMissingError:
         _emit_config_missing_and_exit()
 
+    resolved_model, tier = _resolve_model(cfg, model, fast)
+    if resolved_model is None:
+        _emit_config_missing_fast_model_and_exit()
+
     opts = _RunOpts(
         cfg=cfg,
         mode=_resolve_mode(mode, question),
         question=question,
-        model=model or cfg.ollama.model,
+        model=resolved_model,
+        tier=tier,
         fetch_timeout=timeout_override or cfg.fetch.request_timeout_s,
         no_cache=no_cache,
         verbose=ctx.obj.get("verbose", False),
@@ -372,6 +398,17 @@ def _resolve_mode(mode: str | None, question: str | None) -> str:
     return mode
 
 
+def _resolve_model(
+    cfg: Config, model_opt: str | None, fast: bool
+) -> tuple[str | None, str]:
+    """Pick (model, tier). Returns (None, "fast") when --fast lacks a config."""
+    if model_opt:
+        return model_opt, "explicit"
+    if fast:
+        return cfg.ollama.fast_model, "fast"
+    return cfg.ollama.model, "accurate"
+
+
 def _emit_config_missing_and_exit() -> None:
     click.echo(
         json.dumps(
@@ -379,6 +416,21 @@ def _emit_config_missing_and_exit() -> None:
                 "error": "No ~/.decant/config.yaml. Run `decant config` first.",
                 "code": ErrorCode.CONFIG_MISSING.value,
                 "details": {"config_path": str(CONFIG_PATH)},
+            }
+        )
+    )
+    sys.exit(1)
+
+
+def _emit_config_missing_fast_model_and_exit() -> None:
+    click.echo(
+        json.dumps(
+            {
+                "error": (
+                    "--fast requires ollama.fast_model to be set. "
+                    "Run `decant config` to set it, or pass --model X explicitly."
+                ),
+                "code": ErrorCode.CONFIG_MISSING_FAST_MODEL.value,
             }
         )
     )
@@ -393,6 +445,7 @@ class _RunOpts:
     mode: str
     question: str | None
     model: str
+    tier: str
     fetch_timeout: int
     no_cache: bool
     verbose: bool
@@ -521,6 +574,8 @@ async def _process_one(
     }
     if ollama_ms is not None:
         meta["ollama_ms"] = ollama_ms
+    if mode in ("summary", "both"):
+        meta["tier"] = opts.tier
     if truncated:
         meta["truncated"] = True
 
@@ -562,6 +617,7 @@ def _extract_projection(payload: dict) -> dict:
     p["mode"] = "extract"
     p.pop("summary", None)
     p["meta"].pop("ollama_ms", None)
+    p["meta"].pop("tier", None)
     p["meta"].pop("truncated", None)
     return p
 

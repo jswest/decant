@@ -21,6 +21,7 @@ class ConfigMissingError(Exception):
 class OllamaConfig(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "qwen3:32b"
+    fast_model: str | None = None
     request_timeout_s: int = 300
 
 

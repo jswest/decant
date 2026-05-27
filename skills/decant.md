@@ -89,6 +89,14 @@ when one bad URL shouldn't kill downstream shell-pipeline work.
 - `--no-cache` — bypass the 24h cache. Use when you need a fresh fetch
   (e.g. the page just changed).
 - `--model MODEL` — override the default Ollama model for this run.
+- `--fast` — use the user's configured fast/cheap model
+  (`ollama.fast_model`) instead of the accurate default. Good for
+  triage passes ("is this page about X? quote me the relevant
+  bits"). The accurate model is the right default when the user is
+  asking a substantive question; reach for `--fast` when you're
+  running many URLs and only some matter, or when latency dominates.
+  `--model` overrides `--fast`. Check `meta.tier` to see which model
+  was used (`"fast"`, `"accurate"`, or `"explicit"`).
 - `--timeout SECONDS` — per-URL fetch ceiling.
 - `--allow-partial` — in batch mode, exit 0 if at least one URL
   succeeded. No effect on single-URL runs.
@@ -188,6 +196,7 @@ Errors come back as JSON objects with a `code` field instead of a
 | `ollama_unavailable` / `ollama_timeout` | Local LLM is down or slow. If you only need the text, re-run without `--question` to get extract mode. |
 | `ollama_bad_json` | Rare. Retry once; if it still fails, fall back to extract mode and reason yourself. |
 | `config_missing` | User hasn't set decant up. Tell them to run `decant config`. |
+| `config_missing_fast_model` | You passed `--fast` but the user hasn't configured `ollama.fast_model`. Either drop `--fast` (falls back to accurate) or tell them to set it via `decant config`. |
 | `invalid_url` | The URL didn't parse or isn't http(s). Re-check what you sent. |
 
 ## Polite scraping — implications for you
@@ -207,7 +216,8 @@ Errors come back as JSON objects with a `code` field instead of a
 ## Quick reference
 
     decant url <URL>                              # clean markdown
-    decant url <URL> --question "..."             # LLM findings
+    decant url <URL> --question "..."             # LLM findings (accurate model)
+    decant url <URL> --question "..." --fast      # LLM findings (fast model, if configured)
     decant url <URL> --question "..." --mode both # both
     decant url <URL1> <URL2> <URL3>               # batch (sequential)
     decant search "<query>"                       # find candidate URLs
