@@ -7,18 +7,19 @@ WebSearch for the same questions. Run before/after any extractor swap
 ## What we measure
 
 For each (URL, question, ground-truth-facts) tuple in the corpus, run
-three retrievers and score each output on three axes:
+three retrievers and score each output on four axes:
 
 | Metric | Definition |
 |---|---|
 | **Token count** | Approximate Claude input tokens the output would cost if pasted into a conversation. |
 | **Recall** | Of the listed ground-truth facts, how many appear in the output (exact or paraphrased). Scored as `hit_count / total_facts`. |
 | **Noise** | Approximate share of the output that is chrome, boilerplate, or unrelated content. 1 = lean, 5 = mostly junk. |
+| **Time** | Wall-clock seconds from invocation to usable output. For decant, time the CLI call. For WebSearch, time the tool call. Measure cold (no cache) — see "Caveats" on the cache-warm case. |
 
 Token count is the hard cost. Recall is correctness. Noise is what we
-trade away when extract mode bloats — it's the reason WebSearch's
-shorter synthesis sometimes feels *more* useful than decant's full
-extract.
+trade away when extract mode bloats. Time matters because a 10× cheaper
+answer that takes 20s isn't always the right choice when WebSearch
+returns in 4s.
 
 ## Retrievers under test
 
@@ -52,10 +53,15 @@ new cases.
 
 For each row in the corpus:
 
+Wrap each call in `time` (or capture wall-clock manually) so the
+"Time" metric lands in the same pass as the text capture. Use
+`--no-cache` on decant runs so you measure a cold fetch rather than a
+sub-second cache hit.
+
 ### 1. decant summary
 
 ```bash
-decant url <URL> --question "<question>" \
+time decant url <URL> --question "<question>" --no-cache \
   | jq -r '"\(.summary.answer)\n\n" + ([.summary.findings[].quote] | join("\n\n"))' \
   > /tmp/bench-summary.txt
 ```
@@ -63,15 +69,16 @@ decant url <URL> --question "<question>" \
 ### 2. decant extract
 
 ```bash
-decant url <URL> | jq -r .extract.markdown > /tmp/bench-extract.txt
+time decant url <URL> --no-cache | jq -r .extract.markdown > /tmp/bench-extract.txt
 ```
 
 ### 3. WebSearch
 
 Invoke the WebSearch tool with a query that should surface the
 canonical page (not the URL verbatim — phrase it as a question a user
-would type). Capture the entire returned synthesis as plain text into
-`/tmp/bench-websearch.txt`.
+would type). Time the tool call (the harness wrapping it, or note
+wall-clock before/after). Capture the entire returned synthesis as
+plain text into `/tmp/bench-websearch.txt`.
 
 ### 4. Score each output
 
@@ -108,21 +115,21 @@ template below.
 
 Corpus v1. decant on `<git rev>`. Notes: <anything affecting the run>.
 
-| # | Retriever | Tokens | Recall | Noise | Notes |
-|---|---|---|---|---|---|
-| 1 | decant summary |   |   |   |   |
-| 1 | decant extract |   |   |   |   |
-| 1 | WebSearch |   |   |   |   |
-| 2 | decant summary |   |   |   |   |
+| # | Retriever | Tokens | Recall | Noise | Time (s) | Notes |
+|---|---|---|---|---|---|---|
+| 1 | decant summary |   |   |   |   |   |
+| 1 | decant extract |   |   |   |   |   |
+| 1 | WebSearch |   |   |   |   |   |
+| 2 | decant summary |   |   |   |   |   |
 | ... |
 
 ### Aggregate
 
-| Retriever | Mean tokens | Mean recall | Mean noise |
-|---|---|---|---|
-| decant summary |   |   |   |
-| decant extract |   |   |   |
-| WebSearch |   |   |   |
+| Retriever | Mean tokens | Mean recall | Mean noise | Mean time (s) |
+|---|---|---|---|---|
+| decant summary |   |   |   |   |
+| decant extract |   |   |   |   |
+| WebSearch |   |   |   |   |
 
 ### Notable deltas vs prior run
 
@@ -141,10 +148,12 @@ Corpus v1. decant on `<git rev>`. Notes: <anything affecting the run>.
 - **Token estimates are tokenizer-specific.** `chars / 4` and Claude's
   tokenizer can disagree by 10–15%. Don't mix methods within a single
   results table.
-- **Caching skews timing.** If you re-run a URL within 24h, decant will
-  serve from cache (`meta.cached: true`). Pass `--no-cache` if you
-  want fresh fetches, but note that cache hits *are* the steady-state
-  cost, so caching-on is the right default for token-bloat work.
+- **Caching skews timing.** If you re-run a URL within 24h, decant
+  will serve from cache (`meta.cached: true`) in sub-second time. The
+  benchmark procedure uses `--no-cache` so the Time column reflects a
+  real cold fetch. If you want the steady-state-cache cost for
+  comparison, run a second pass without `--no-cache` and label it
+  "warm" — but don't average warm and cold times together.
 
 ## When to re-run
 
