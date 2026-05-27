@@ -31,8 +31,9 @@ Don't use it for:
 ## How to call it
 
 Always invoke via the Bash tool. Output is a JSON object on stdout
-(or a JSON array if multiple URLs). Exit code is non-zero on any
-error.
+(or a JSON array if multiple URLs). In batch mode, inspect each
+element's `code` field rather than relying solely on exit status —
+see the exit-code table under "Multiple URLs" below.
 
 ### Just the clean markdown
 
@@ -71,12 +72,26 @@ Output is a JSON array in argument order. Fetches are sequential (no
 parallelism — see "polite scraping" below). Pass them all in one
 invocation so they share a browser context.
 
+In batch mode a summary line is printed to stderr (`2 succeeded, 1
+failed (run completed in 3.4s)`), and exit code follows this table:
+
+| Scenario | Default exit | With `--allow-partial` |
+|---|---|---|
+| All URLs succeeded | 0 | 0 |
+| Some URLs succeeded, some failed | 1 | 0 |
+| All URLs failed | 1 | 1 |
+
+Default fail-strict is safer for automation. Use `--allow-partial`
+when one bad URL shouldn't kill downstream shell-pipeline work.
+
 ### Useful flags
 
 - `--no-cache` — bypass the 24h cache. Use when you need a fresh fetch
   (e.g. the page just changed).
 - `--model MODEL` — override the default Ollama model for this run.
 - `--timeout SECONDS` — per-URL fetch ceiling.
+- `--allow-partial` — in batch mode, exit 0 if at least one URL
+  succeeded. No effect on single-URL runs.
 
 ## Searching the web
 

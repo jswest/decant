@@ -127,9 +127,10 @@ def test_multiple_urls_emit_array_in_order(patched_paths, stub_pipeline):
         main, ["url", "https://a.com", "https://b.com"]
     )
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert isinstance(payload, list)
     assert [p["url"] for p in payload] == ["https://a.com", "https://b.com"]
+    assert "2 succeeded, 0 failed" in result.stderr
 
 
 def test_soft_404_likely_via_title(patched_paths, stub_pipeline, monkeypatch):
@@ -167,9 +168,44 @@ def test_exit_nonzero_when_any_url_errors(patched_paths, stub_pipeline):
         main, ["url", "https://ok.com", "ftp://bad.com"]
     )
     assert result.exit_code == 1
-    payload = json.loads(result.output)
+    payload = json.loads(result.stdout)
     assert "error" not in payload[0]
     assert payload[1]["code"] == "invalid_url"
+
+
+def test_allow_partial_mixed_exits_zero(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://ok.com", "ftp://bad.com", "--allow-partial"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert "error" not in payload[0]
+    assert payload[1]["code"] == "invalid_url"
+
+
+def test_allow_partial_all_fail_still_exits_one(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "ftp://bad1.com", "ftp://bad2.com", "--allow-partial"]
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload[0]["code"] == "invalid_url"
+    assert payload[1]["code"] == "invalid_url"
+
+
+def test_batch_emits_stderr_summary(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(
+        main, ["url", "https://ok.com", "ftp://bad.com"]
+    )
+    assert "1 succeeded, 1 failed" in result.stderr
+    assert "run completed in" in result.stderr
+
+
+def test_single_url_no_summary_line(patched_paths, stub_pipeline):
+    result = CliRunner().invoke(main, ["url", "https://example.com"])
+    assert result.exit_code == 0, result.output
+    assert "succeeded" not in result.stderr
+    assert "failed" not in result.stderr
 
 
 def test_config_missing_emits_code(tmp_path, monkeypatch):

@@ -308,6 +308,11 @@ def _search_error(
     default=None,
     help="Per-URL fetch timeout in seconds (defaults to fetch.request_timeout_s).",
 )
+@click.option(
+    "--allow-partial",
+    is_flag=True,
+    help="In batch mode, exit 0 if at least one URL succeeded (default: fail-strict).",
+)
 @click.pass_context
 def url_cmd(
     ctx: click.Context,
@@ -317,6 +322,7 @@ def url_cmd(
     model: str | None,
     no_cache: bool,
     timeout_override: int | None,
+    allow_partial: bool,
 ) -> None:
     """Fetch one or more URLs sequentially and emit JSON."""
     try:
@@ -335,11 +341,25 @@ def url_cmd(
         ua=build_user_agent(cfg.contact_email),
     )
 
+    is_batch = len(urls) > 1
+    batch_start = time.monotonic()
     results = asyncio.run(_process_all(opts, urls))
+    elapsed_s = time.monotonic() - batch_start
 
-    payload = results[0] if len(urls) == 1 else results
+    payload = results if is_batch else results[0]
     click.echo(json.dumps(payload, indent=2))
-    if any("error" in r for r in results):
+
+    succeeded = sum(1 for r in results if "error" not in r)
+    failed = len(results) - succeeded
+
+    if is_batch:
+        click.echo(
+            f"{succeeded} succeeded, {failed} failed "
+            f"(run completed in {elapsed_s:.1f}s)",
+            err=True,
+        )
+
+    if failed > 0 and (succeeded == 0 or not allow_partial):
         sys.exit(1)
 
 
