@@ -86,7 +86,11 @@ class Fetcher:
     async def __aenter__(self) -> Fetcher:
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(headless=True)
-        self._context = await self._browser.new_context(user_agent=self._user_agent)
+        # bypass_csp: strict-CSP sites (e.g. SPA dashboards) would otherwise
+        # refuse Readability.js injection via add_script_tag.
+        self._context = await self._browser.new_context(
+            user_agent=self._user_agent, bypass_csp=True
+        )
         await self._context.route("**/*", self._route)
         return self
 
