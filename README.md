@@ -8,7 +8,7 @@ It exists to save context tokens for hosted coding agents (Claude Code, Cursor, 
 
 ## How it compares to WebSearch
 
-The closest alternative for most agents is the built-in `WebSearch` tool. Indexed against WebSearch on a 5-URL corpus (full methodology and per-URL scores in [`docs/REPORT-extraction-results-3.md`](./docs/REPORT-extraction-results-3.md)):
+The closest alternative for most agents is the built-in `WebSearch` tool. Indexed against WebSearch on a 5-URL corpus.
 
 | Retriever | Tokens | Recall | Time |
 |---|---:|---:|---:|
@@ -19,9 +19,7 @@ The closest alternative for most agents is the built-in `WebSearch` tool. Indexe
 | `decant url --question --terse` | 25% | 75% | 367% |
 | `decant url --question --accurate --terse` | 23% | 76% | 467% |
 
-Lower is better for tokens and time; higher is better for recall. WebSearch wall-clock is a subjective ~6s for a parallel batch — treat the time column as order-of-magnitude.
-
-The shape of the tradeoff: decant trades 4–6× more wall-clock for 25–75% of WebSearch's token cost, with recall within ±15 points of WebSearch depending on mode. WebSearch's recall also drifts run-to-run as its index changes (REPORT-2 had it at 73% vs 100% baseline here), so the recall column is the noisiest signal.
+The shape of the tradeoff: decant trades 4–6× more wall-clock for 25–75% of WebSearch's token cost, with recall within ±15 points of WebSearch depending on mode.
 
 ## Install
 
@@ -31,12 +29,13 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running Ollam
 git clone https://github.com/<you>/decant && cd decant
 uv sync
 uv run playwright install chromium      # one-time browser install
+uv tool install .
 ```
 
 Then run the interactive first-run setup:
 
 ```bash
-uv run decant config
+decant config
 ```
 
 This writes `~/.decant/config.yaml` and creates `~/.decant/cache/`.
@@ -49,17 +48,9 @@ The agent-facing skill lives at [`skills/decant.md`](./skills/decant.md). Copy i
 cp skills/decant.md ~/.claude/skills/decant.md
 ```
 
-Works with any harness that reads Anthropic's Agent Skills format — Claude Code, [Pi](https://pi.dev), [Goose](https://goose-docs.ai/), Cowork. The skill teaches the agent when to reach for `decant` instead of a built-in fetch, how to invoke each mode (`extract` / `summary` / `both`), how to parse the JSON output, and how to recover from each error code.
+Works with any harness that reads Anthropic's Agent Skills format — Claude Code, [Pi](https://pi.dev), [Goose](https://goose-docs.ai/), etc. The skill teaches the agent when to reach for `decant` instead of a built-in fetch, how to invoke each mode (`extract` / `summary` / `both`), how to parse the JSON output, and how to recover from each error code.
 
-For the agent to actually be able to run `decant`, install it as a CLI tool so the binary is on `PATH` from wherever the agent happens to be working:
-
-```bash
-uv tool install .                  # or: uv tool install --editable .
-```
-
-`uv run decant` only resolves inside this project directory; `uv tool install` makes `decant` available globally.
-
-**Re-copy after every `git pull`** — the skill contract changes pre-1.0. The CLI resolves through the installed package, so `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync.
+**Re-copy the skill after every `git pull`** — the skill contract changes pre-1.0. The CLI resolves through the installed package, so `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync.
 
 ## Usage
 
@@ -100,7 +91,7 @@ Output is a single JSON object on stdout:
 ### Ask a research question (summary mode)
 
 ```bash
-uv run decant url https://example.com/article --question "What is the author's main claim?"
+decant url https://example.com/article --question "What is the author's main claim?"
 ```
 
 Returns Ollama-distilled findings instead of raw markdown:
@@ -131,7 +122,7 @@ Returns Ollama-distilled findings instead of raw markdown:
 ### Both at once
 
 ```bash
-uv run decant url https://example.com/article --question "..." --mode both
+decant url https://example.com/article --question "..." --mode both
 ```
 
 Returns the markdown *and* the summary in one response.
@@ -139,7 +130,7 @@ Returns the markdown *and* the summary in one response.
 ### Multiple URLs
 
 ```bash
-uv run decant url https://a.com https://b.com https://c.com
+decant url https://a.com https://b.com https://c.com
 ```
 
 URLs are fetched sequentially (no parallelism — see [project notes](#project-notes)). The output is a JSON array in the same order as the arguments. In batch mode a summary line is printed to stderr (`2 succeeded, 1 failed (run completed in 3.4s)`), and the exit code follows this table:
@@ -155,17 +146,17 @@ Default fail-strict is safer for automation. Use `--allow-partial` when one bad 
 ### Search the web (Brave LLM Context API)
 
 ```bash
-uv run decant search "qwen3 license terms"
+decant search "qwen3 license terms"
 ```
 
 Hits Brave's LLM Context API and returns a JSON payload of URLs + pre-extracted snippets — input for the orchestrator, not an end product. The intended flow is two steps:
 
 ```bash
 # 1. Find candidate URLs
-uv run decant search "qwen3 license terms"
+decant search "qwen3 license terms"
 
 # 2. Pick the ones worth reading and pipe into decant url
-uv run decant url https://huggingface.co/Qwen/Qwen3-32B https://qwenlm.github.io/blog \
+decant url https://huggingface.co/Qwen/Qwen3-32B https://qwenlm.github.io/blog \
   --question "What are the license terms for Qwen3?"
 ```
 
@@ -229,7 +220,7 @@ Search results have their own cache TTL (default 1 hour, separate from page-extr
 ### Terse summary mode
 
 ```bash
-uv run decant url https://example.com/article --question "What is X?" --terse
+decant url https://example.com/article --question "What is X?" --terse
 ```
 
 Each finding keeps `context` and `relevance` but drops the verbatim `quote`. `meta.terse: true` confirms it. Lean-and-cheap; less auditable. Rejected with `--mode extract`.
@@ -251,8 +242,8 @@ Decant does **not** auto-error on `likely` — the verdict is advisory. Calling 
 ### Cache
 
 ```bash
-uv run decant cache stats     # {"entries": N, "total_bytes": M, "oldest": ..., "newest": ...}
-uv run decant cache clear     # {"cleared": N, "freed_bytes": M}
+decant cache stats     # {"entries": N, "total_bytes": M, "oldest": ..., "newest": ...}
+decant cache clear     # {"cleared": N, "freed_bytes": M}
 ```
 
 Different question/model/terse settings get separate entries; toggling them never returns stale results. `--mode both` writes the full payload plus single-mode projections so follow-up `extract`/`summary` calls hit cache. TTL defaults to 24 hours. See [SPEC.md](./SPEC.md) for the cache-key formula.
@@ -260,7 +251,7 @@ Different question/model/terse settings get separate entries; toggling them neve
 ### Version
 
 ```bash
-uv run decant version
+decant version
 ```
 
 Emits `{"version": "...", "config_path": "...", "cache_dir": "..."}`.
