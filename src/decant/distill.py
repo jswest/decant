@@ -105,6 +105,7 @@ async def distill(
     model: str,
     question: str,
     markdown: str,
+    keep_alive: str = "5m",
     timeout_s: int,
     terse: bool = False,
 ) -> tuple[DistillResult | TerseDistillResult, int, bool]:
@@ -122,6 +123,7 @@ async def distill(
         "messages": [{"role": "user", "content": build_prompt(question, md, terse)}],
         "format": result_cls.model_json_schema(),
         "stream": False,
+        "keep_alive": keep_alive,
     }
     url = f"{host.rstrip('/')}/api/chat"
 

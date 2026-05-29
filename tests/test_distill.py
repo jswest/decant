@@ -197,3 +197,37 @@ async def test_distill_terse_returns_terse_result():
     assert isinstance(result, TerseDistillResult)
     assert result.findings[0].context == "Intro"
     assert not hasattr(result.findings[0], "quote")
+
+
+@pytest.mark.asyncio
+async def test_distill_sends_keep_alive():
+    """Verify keep_alive is passed in the outgoing request body."""
+    captured: dict = {}
+
+    def handler(req):
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(200, json=_valid_chat_response())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await distill(
+            client, "http://x", "qwen3:32b", "Q?", "md",
+            keep_alive="10m", timeout_s=10,
+        )
+    assert captured["body"]["keep_alive"] == "10m"
+
+
+@pytest.mark.asyncio
+async def test_distill_default_keep_alive_is_5m():
+    """Default keep_alive should be 5m (Ollama's default)."""
+    captured: dict = {}
+
+    def handler(req):
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(200, json=_valid_chat_response())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await distill(
+            client, "http://x", "qwen3:32b", "Q?", "md",
+            timeout_s=10,
+        )
+    assert captured["body"]["keep_alive"] == "5m"

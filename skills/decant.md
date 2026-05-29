@@ -266,3 +266,13 @@ Errors come back as JSON objects with a `code` field instead of a
     decant cache stats                            # inspect cache
     decant cache clear                            # wipe cache
     decant version                                # version + paths
+
+## Tuning keep_alive for two-model workflows
+
+When using both `model` and `fast_model` (see tiered distillation), models may
+evict each other if GPU memory is limited. To reduce reload latency:
+
+- Set `ollama.keep_alive: -1` if only one model is in play and GPU memory is ample.
+- Set `ollama.keep_alive: 30s` or similar short duration when alternating between
+  tiers on a single-GPU machine so the outgoing model unloads quickly.
+- The default `5m` is safe for single-model use and matches Ollama's built-in default.

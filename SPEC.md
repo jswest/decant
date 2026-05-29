@@ -143,14 +143,16 @@ ollama:
   host: http://localhost:11434
   model: qwen3:32b                       # name as it appears in `ollama list`
   fast_model: qwen3:8b                   # optional; when set, becomes the summary-mode default (--accurate opts out)
-  request_timeout_s: 300                 # ceiling for a single /api/chat call
+  request_timeout_s
+- **keep_alive** (string, default `5m`) — Ollama keep_alive duration. Controls how long the model stays loaded after a request. Valid values: Go-style duration (`5m`, `1h`, `30s`, `500ms`), `0` (unload immediately), `-1` (keep loaded indefinitely). **VRAM tradeoff:** `-1` keeps the model resident forever, great for latency but locks GPU memory. When running both `model` and `fast_model` where only one fits at a time, use a shorter keep_alive (e.g. `30s`) to allow model rotation.: 300                 # ceiling for a single /api/chat call
 
 cache:
   ttl_hours: 24
   # cache directory is fixed at ~/.decant/cache/
 
 fetch:
-  request_timeout_s: 60                  # hard ceiling for one URL's Playwright cycle
+  request_timeout_s
+- **keep_alive** (string, default `5m`) — Ollama keep_alive duration. Controls how long the model stays loaded after a request. Valid values: Go-style duration (`5m`, `1h`, `30s`, `500ms`), `0` (unload immediately), `-1` (keep loaded indefinitely). **VRAM tradeoff:** `-1` keeps the model resident forever, great for latency but locks GPU memory. When running both `model` and `fast_model` where only one fits at a time, use a shorter keep_alive (e.g. `30s`) to allow model rotation.: 60                  # hard ceiling for one URL's Playwright cycle
   navigation_wait: networkidle           # or "domcontentloaded"
   block_resources:                       # passed to Playwright route handler
     - image
@@ -178,7 +180,8 @@ For each URL, in order:
 1. **Validate** — URL must parse, scheme must be `http` or `https`. Otherwise: `invalid_url`.
 2. **Cache lookup** (unless `--no-cache`) — compute key per the `Key` rule under §"Caching". If `~/.decant/cache/<key>.json` exists and `mtime` is within `cache.ttl_hours`, return cached result with `meta.cached: true`.
 3. **robots.txt** — fetch `<scheme>://<host>/robots.txt` (with our UA). Parse with `protego` (more spec-correct than stdlib `urllib.robotparser`). Cache parsed result in-process for the duration of the run. If our UA is disallowed for the path: emit `robots_disallowed` error and stop.
-4. **Playwright fetch** — headless Chromium, block image/font/media resources via route handler, wait for `domcontentloaded` then `networkidle` (cap at `fetch.request_timeout_s`). Set User-Agent. Capture `final_url`, page title, full HTML. After the page settles, inject the vendored [Mozilla Readability.js](https://github.com/mozilla/readability) source via `page.add_script_tag` and evaluate `new Readability(document.cloneNode(true)).parse()`. The resulting article object — or `null` — is captured on `FetchResult.article`. The browser context sets `bypass_csp=True` so the helper script is admitted on strict-CSP sites.
+4. **Playwright fetch** — headless Chromium, block image/font/media resources via route handler, wait for `domcontentloaded` then `networkidle` (cap at `fetch.request_timeout_s
+- **keep_alive** (string, default `5m`) — Ollama keep_alive duration. Controls how long the model stays loaded after a request. Valid values: Go-style duration (`5m`, `1h`, `30s`, `500ms`), `0` (unload immediately), `-1` (keep loaded indefinitely). **VRAM tradeoff:** `-1` keeps the model resident forever, great for latency but locks GPU memory. When running both `model` and `fast_model` where only one fits at a time, use a shorter keep_alive (e.g. `30s`) to allow model rotation.`). Set User-Agent. Capture `final_url`, page title, full HTML. After the page settles, inject the vendored [Mozilla Readability.js](https://github.com/mozilla/readability) source via `page.add_script_tag` and evaluate `new Readability(document.cloneNode(true)).parse()`. The resulting article object — or `null` — is captured on `FetchResult.article`. The browser context sets `bypass_csp=True` so the helper script is admitted on strict-CSP sites.
 5. **Extract** — three-tier fallback chain. Tiers 1 and 2 gate on `len(content) >= 250` chars; tier 3 only needs non-empty output:
     1. **Mozilla Readability.js** — `markdownify(article["content"])` when the Fetcher captured a parsed article
     2. `trafilatura.extract(html, output_format="markdown", include_links=True)`
@@ -310,7 +313,8 @@ Codes (closed set):
 - `fetch_failed` — Playwright threw (timeout, DNS, connection refused, 4xx/5xx).
 - `extract_empty` — all three extractors returned empty/whitespace.
 - `ollama_unavailable` — could not reach the configured Ollama host.
-- `ollama_timeout` — `/api/chat` exceeded `ollama.request_timeout_s`.
+- `ollama_timeout` — `/api/chat` exceeded `ollama.request_timeout_s
+- **keep_alive** (string, default `5m`) — Ollama keep_alive duration. Controls how long the model stays loaded after a request. Valid values: Go-style duration (`5m`, `1h`, `30s`, `500ms`), `0` (unload immediately), `-1` (keep loaded indefinitely). **VRAM tradeoff:** `-1` keeps the model resident forever, great for latency but locks GPU memory. When running both `model` and `fast_model` where only one fits at a time, use a shorter keep_alive (e.g. `30s`) to allow model rotation.`.
 - `ollama_bad_json` — model returned non-JSON or JSON that did not match the schema, even after one retry.
 - `config_missing` — no `~/.decant/config.yaml` (run `decant config` first).
 - `config_missing_fast_model` — `--fast` was passed but `ollama.fast_model` is unset. Run `decant config` to set it, or pass `--model X` explicitly.
