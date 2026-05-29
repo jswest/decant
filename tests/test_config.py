@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from decant.config import Config, ConfigMissingError, load_config, save_config
+from decant.config import OllamaConfig, Config, ConfigMissingError, load_config, save_config
 
 
 def test_save_and_load_round_trip(tmp_path):
@@ -46,7 +46,7 @@ def test_email_validation_rejects_garbage(bad):
 
 
 def test_search_config_defaults():
-    from decant.config import SearchConfig
+    from decant.config import OllamaConfig, SearchConfig
 
     assert Config(contact_email="a@b.co").search == SearchConfig()
 
@@ -73,3 +73,24 @@ def test_brave_api_key_resolution(tmp_path, monkeypatch, yaml_key, env_value, ex
         monkeypatch.setenv("BRAVE_SEARCH_API_KEY", env_value)
 
     assert load_config(path).search.brave_api_key == expected
+
+
+def test_ollama_config_default_keep_alive():
+    """Default keep_alive should be 5m."""
+    cfg = OllamaConfig()
+    assert cfg.keep_alive == "5m"
+
+
+def test_ollama_config_valid_keep_alive():
+    """Valid keep_alive values should be accepted."""
+    for val in ["5m", "1h", "30s", "500ms", "0", "-1"]:
+        cfg = OllamaConfig(keep_alive=val)
+        assert cfg.keep_alive == val
+
+
+def test_ollama_config_invalid_keep_alive():
+    """Invalid keep_alive values should raise ValueError."""
+    import pytest as pt
+    for val in ["abc", "5x", "1.5m", ""]:
+        with pt.raises(Exception):
+            OllamaConfig(keep_alive=val)
