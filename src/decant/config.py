@@ -22,7 +22,19 @@ class OllamaConfig(BaseModel):
     host: str = "http://localhost:11434"
     model: str = "qwen3:32b"
     fast_model: str | None = None
+    keep_alive: str = "5m"
     request_timeout_s: int = 300
+
+    @field_validator("keep_alive")
+    @classmethod
+    def _validate_keep_alive(cls, v: str) -> str:
+        if v == "-1" or v == "0":
+            return v
+        if not re.match(r"^\d+(ms|s|m|h)$", v):
+            raise ValueError(
+                f"keep_alive must be -1, 0, or a duration like 5m/1h/30s, got {v!r}"
+            )
+        return v
 
 
 class CacheConfig(BaseModel):
