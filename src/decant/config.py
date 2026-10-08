@@ -19,6 +19,7 @@ class ConfigMissingError(Exception):
 
 
 class OllamaConfig(BaseModel):
+    enabled: bool = True
     host: str = "http://localhost:11434"
     model: str = "qwen3:32b"
     fast_model: str | None = None

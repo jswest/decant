@@ -38,6 +38,31 @@ Prompts:
 
 Writes `~/.decant/config.yaml`. Creates `~/.decant/cache/` if missing. Idempotent — running it again lets you re-edit.
 
+**Non-interactive mode.** Passing any of `--email`, `--brave-key`, `--ollama-host`, `--model`, `--fast-model`, `--ollama/--no-ollama` or `--ttl-hours` skips every prompt. The existing config (or defaults) is loaded, only the passed values are overlaid, and the result is validated, saved and printed as JSON (`config_path`, `contact_email`, `ollama.{enabled,host,model,fast_model}`, `brave_key` as a boolean). `''` clears `--brave-key` and `--fast-model`. `--email` is required when no config exists yet (`config_missing` otherwise); an implausible email returns `config_invalid`. This is the path agents use, since they can't answer prompts.
+
+### `decant setup`
+
+Runs `<sys.executable> -m playwright install chromium` (so it targets the playwright inside decant's own environment, including under `uv tool install`), then launches and closes headless Chromium to prove it works. Prints a JSON status report:
+
+```json
+{
+  "version": "0.1.0",
+  "platform": "Darwin",
+  "browser": { "ok": true },
+  "config": "ok",
+  "config_path": "~/.decant/config.yaml",
+  "contact_email": "a@b.co",
+  "ollama": { "enabled": true, "host": "http://localhost:11434", "reachable": true, "models": ["qwen3:8b"], "model": "qwen3:32b", "fast_model": null },
+  "brave_key": false
+}
+```
+
+Exits 1 if Chromium won't launch, with `browser.error` set. On Linux, `browser.fix` carries the `playwright install-deps chromium` command for missing system libraries. Idempotent; the `/decant:setup` skill runs it on every install or upgrade.
+
+### `ollama.enabled`
+
+Defaults to `true`. When `false`, `--question` (and `--mode summary|both`) runs fall back to extract mode instead of calling Ollama: the response is a normal extract payload plus `meta.summary_skipped: "ollama_disabled"`, and `--terse` is ignored. The annotation is per-run and never written to the cache.
+
 ### `decant url <URL> [<URL> ...]`
 
 Primary command. Fetches one or more URLs sequentially and emits JSON.
@@ -185,6 +210,8 @@ For each URL, in order:
     3. BeautifulSoup: select `main, article, [role=main]` (in that order, first hit wins); if none, use `body`. Strip `<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`. Pipe through `html2text`.
 
     Record which extractor produced the result in `meta.extractor` (one of `readability.js`, `trafilatura`, `bs4+html2text`).
+
+    In summary/both mode (unless `--no-cache`), write the extract-only projection to the extract cache key now, before distilling. An Ollama failure then leaves the fetch cached, so the caller's fallback `--mode extract` call is instant.
 6. **Distill** (only if mode includes summary) — POST to `<ollama.host>/api/chat`. Single user turn with the prompt below. Pass the Pydantic-derived JSON Schema as Ollama's `format` parameter so generation is constrained to the result shape at decode time. Validate the response with the same Pydantic model before returning.
 7. **Compose result JSON** per the output schema.
 8. **Cache write** (unless `--no-cache`) — write the result JSON to `~/.decant/cache/<key>.json`. Set `meta.cached: false` in the returned copy.
@@ -228,6 +255,7 @@ Verdict:
   - **Summary / both modes:** `sha256(url + "|" + mode + "|" + (question or "") + "|" + model)` for non-terse calls; `sha256(url + "|" + mode + "|" + (question or "") + "|" + model + "|terse")` when `--terse` is set. Different questions, models, or terse settings produce different entries (the LLM output depends on all three). Non-terse keys are byte-identical to their pre-`--terse` shape, so the issue-#22 upgrade does not invalidate existing user caches.
   - **Extract mode:** `sha256(url + "|extract")`. Question, model, and terse-ness are all ignored because the extracted markdown depends on none of them — swapping `--model` or toggling `--terse` doesn't bust an extract cache.
 - **`--mode both` warms single-mode caches:** running `--mode both` writes three entries — the full `both` payload at the `both` key, plus extract-only and summary-only projections under the corresponding single-mode keys. A follow-up `--mode extract` or `--mode summary` (same question + model) call against the same URL hits cache.
+- **Summary mode warms the extract cache too**, before the Ollama call (pipeline step 5), so the extract entry exists even when distillation fails.
 - **TTL:** `cache.ttl_hours` from config, default 24. Enforced via file `mtime`. No background cleanup; stale files are simply overwritten on next miss.
 - **Eviction:** none in v0. `decant cache clear` is the only sweep.
 - **Cache invariant:** a cached result is byte-identical to a fresh result for the same key, except `meta.cached` flips to `true` and `meta.cached_at` is added. Projections written during `--mode both` warming satisfy this invariant against fresh single-mode runs.
@@ -309,11 +337,14 @@ Codes (closed set):
 - `robots_disallowed` — robots.txt forbids our UA on this path.
 - `fetch_failed` — Playwright threw (timeout, DNS, connection refused, 4xx/5xx).
 - `extract_empty` — all three extractors returned empty/whitespace.
+- `browser_missing` — headless Chromium failed to launch (not installed, or missing system libraries on Linux). Emitted once per URL in the batch. Run `decant setup`.
 - `ollama_unavailable` — could not reach the configured Ollama host.
+- `ollama_model_missing` — Ollama returned 404 for the model (not pulled). `details.model` names it; the message includes the `ollama pull` command.
 - `ollama_timeout` — `/api/chat` exceeded `ollama.request_timeout_s`.
 - `ollama_bad_json` — model returned non-JSON or JSON that did not match the schema, even after one retry.
-- `config_missing` — no `~/.decant/config.yaml` (run `decant config` first).
-- `config_missing_fast_model` — `--fast` was passed but `ollama.fast_model` is unset. Run `decant config` to set it, or pass `--model X` explicitly.
+- `config_missing` — no `~/.decant/config.yaml`, or `decant config` flags were passed without `--email` on a first run. Run the `/decant:setup` skill or `decant config --email ...`.
+- `config_missing_fast_model` — `--fast` was passed but `ollama.fast_model` is unset. Run `decant config --fast-model MODEL`, or pass `--model X` explicitly.
+- `config_invalid` — `decant config --email` got an implausible email.
 - `search_no_api_key` — `decant search` invoked without a Brave key in config or env.
 - `search_unauthorized` — Brave returned 401 or 403.
 - `search_rate_limited` — Brave returned 429. `details.retry_after` carries the parsed `Retry-After` header in seconds, if any.
@@ -431,7 +462,7 @@ Minimum set, pinned in `pyproject.toml`:
 
 - `click` — CLI
 - `pyyaml` — config
-- `playwright` — fetch (also requires `playwright install chromium` post-install)
+- `playwright` — fetch (Chromium itself is installed by `decant setup`)
 - `trafilatura` — secondary extractor (the primary is vendored Mozilla Readability.js — runs in the Playwright page, no Python dep)
 - `markdownify` — HTML → MD bridge for the Readability.js path
 - `beautifulsoup4` + `html2text` — tertiary extractor

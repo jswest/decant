@@ -1,0 +1,12 @@
+{
+  "name": "decant",
+  "version": "0.1.0",
+  "description": "Fetch and search the web through the local decant CLI: clean markdown and local-LLM findings in compact JSON instead of full pages.",
+  "author": {
+    "name": "John West"
+  },
+  "homepage": "https://github.com/jswest/decant",
+  "repository": "https://github.com/jswest/decant",
+  "license": "MIT",
+  "keywords": ["web", "fetch", "search", "markdown", "ollama"]
+}

@@ -646,3 +646,85 @@ def test_both_mode_warm_extract_projection_omits_terse(
     assert p2["meta"]["cached"] is True
     assert "terse" not in p2["meta"]
 
+
+# --- Plug-and-play failure modes ---------------------------------------------
+
+
+def test_browser_missing_emits_json_for_every_url(patched_paths, stub_pipeline, monkeypatch):
+    from decant.fetch import BrowserMissingError
+
+    class NoBrowserFetcher:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise BrowserMissingError("Executable doesn't exist")
+
+        async def __aexit__(self, *exc):
+            pass
+
+    monkeypatch.setattr("decant.cli.Fetcher", NoBrowserFetcher)
+    result = CliRunner().invoke(main, ["url", "https://a.com", "https://b.com"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert [p["code"] for p in payload] == ["browser_missing", "browser_missing"]
+    assert "decant setup" in payload[0]["error"]
+
+
+def test_ollama_disabled_degrades_question_to_extract(patched_paths, stub_pipeline):
+    cfg_path, _ = patched_paths
+    cfg_path.write_text(cfg_path.read_text() + "  enabled: false\n")
+    runner = CliRunner()
+
+    for _ in range(2):  # fresh, then cache hit
+        result = runner.invoke(
+            main, ["url", "https://x.com", "--question", "Q?", "--terse"]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["mode"] == "extract"
+        assert "markdown" in payload["extract"]
+        assert "summary" not in payload
+        assert payload["meta"]["summary_skipped"] == "ollama_disabled"
+
+    plain = json.loads(runner.invoke(main, ["url", "https://x.com"]).output)
+    assert plain["meta"]["cached"] is True
+    assert "summary_skipped" not in plain["meta"]
+
+
+def test_ollama_failure_still_warms_extract_cache(
+    patched_paths, stub_pipeline, monkeypatch
+):
+    from decant.distill import OllamaUnavailableError
+
+    async def down(*a, **kw):
+        raise OllamaUnavailableError("connection refused")
+
+    monkeypatch.setattr("decant.cli.distill", down)
+    url = "https://ollama-down.example.com"
+    runner = CliRunner()
+
+    r1 = runner.invoke(main, ["url", url, "--question", "Q?"])
+    assert json.loads(r1.output)["code"] == "ollama_unavailable"
+
+    r2 = runner.invoke(main, ["url", url])
+    assert r2.exit_code == 0, r2.output
+    p2 = json.loads(r2.output)
+    assert p2["meta"]["cached"] is True
+    assert "markdown" in p2["extract"]
+    assert "summary_skipped" not in p2["meta"]
+
+
+def test_ollama_model_missing_names_the_pull(patched_paths, stub_pipeline, monkeypatch):
+    from decant.distill import OllamaModelMissingError
+
+    async def missing(*a, **kw):
+        raise OllamaModelMissingError("model 'qwen3:32b' not found")
+
+    monkeypatch.setattr("decant.cli.distill", missing)
+    result = CliRunner().invoke(main, ["url", "https://x.com", "--question", "Q?"])
+    payload = json.loads(result.output)
+    assert payload["code"] == "ollama_model_missing"
+    assert payload["details"]["model"] == "qwen3:32b"
+    assert "ollama pull qwen3:32b" in payload["error"]
+

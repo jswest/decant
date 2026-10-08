@@ -171,3 +171,61 @@ def test_config_no_fast_default_note_when_fast_model_unset(
     )
     assert result.exit_code == 0, result.output
     assert "default to the fast tier" not in result.output
+
+
+# --- Non-interactive (flag) mode ---------------------------------------------
+
+
+def test_config_flags_write_without_prompts(patched_paths):
+    cfg_path, cache_dir = patched_paths
+    result = CliRunner().invoke(
+        main, ["config", "--email", "alice@example.com", "--no-ollama"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["contact_email"] == "alice@example.com"
+    assert payload["ollama"]["enabled"] is False
+    assert "alice@example.com" in cfg_path.read_text()
+    assert cache_dir.is_dir()
+
+
+def test_config_flags_overlay_existing(patched_paths):
+    cfg_path, _ = patched_paths
+    runner = CliRunner()
+    runner.invoke(
+        main,
+        ["config", "--email", "alice@example.com", "--brave-key", "brv-abc123"],
+    )
+    result = runner.invoke(
+        main, ["config", "--email", "bob@example.com", "--fast-model", "qwen3:8b"]
+    )
+    assert result.exit_code == 0, result.output
+    text = cfg_path.read_text()
+    assert "bob@example.com" in text
+    assert "brv-abc123" in text
+    assert "qwen3:8b" in text
+
+
+def test_config_flags_empty_string_clears(patched_paths):
+    runner = CliRunner()
+    runner.invoke(
+        main,
+        ["config", "--email", "a@b.co", "--brave-key", "brv-x", "--fast-model", "m"],
+    )
+    result = runner.invoke(main, ["config", "--brave-key", "", "--fast-model", ""])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["brave_key"] is False
+    assert payload["ollama"]["fast_model"] is None
+
+
+def test_config_flags_bad_email(patched_paths):
+    result = CliRunner().invoke(main, ["config", "--email", "nope"])
+    assert result.exit_code == 1
+    assert json.loads(result.output)["code"] == "config_invalid"
+
+
+def test_config_flags_first_run_requires_email(patched_paths):
+    result = CliRunner().invoke(main, ["config", "--no-ollama"])
+    assert result.exit_code == 1
+    assert json.loads(result.output)["code"] == "config_missing"

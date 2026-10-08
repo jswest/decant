@@ -21,36 +21,37 @@ The closest alternative for most agents is the built-in `WebSearch` tool. Indexe
 
 The shape of the tradeoff: decant trades 4–6× more wall-clock for 25–75% of WebSearch's token cost, with recall within ±15 points of WebSearch depending on mode.
 
-## Install
+## Quick start (Claude Code)
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus a running Ollama instance for summary mode and a [Brave Search API](https://api.search.brave.com/) key for `decant search` (free tier covers light use; paid tier is $5/1k requests).
+In Claude Code (terminal, desktop or IDE), type:
 
-```bash
-git clone https://github.com/<you>/decant && cd decant
-uv sync
-uv run playwright install chromium      # one-time browser install
-uv tool install .
+```
+/plugin marketplace add jswest/decant
+/plugin install decant
+/decant:setup
 ```
 
-Then run the interactive first-run setup:
+That's it. The setup skill has your agent install everything (uv, the `decant` CLI and a headless browser), then asks you for a contact email and an optional Brave Search key. After that, hand your agent a URL or ask it to look something up and it'll reach for decant on its own.
+
+To update: `/plugin update decant` for the skills, then `/decant:setup` again (it upgrades the CLI).
+
+### What's optional
+
+- **Ollama** powers `--question` mode (local-LLM findings instead of raw markdown). Without it, decant still returns clean page text and your agent answers from that. To add it later: install [Ollama](https://ollama.com), `ollama pull qwen3:8b`, then `decant config --ollama --model qwen3:8b`.
+- **A [Brave Search API](https://api.search.brave.com/) key** powers `decant search` (free tier covers light use; paid is $5/1k requests). Without one, your agent finds URLs with its built-in web search and reads them with `decant url`. Add one later with `decant config --brave-key KEY`.
+
+### Other harnesses
+
+The skills in [`skills/`](./skills/) are plain Agent Skills and work in any harness that reads that format ([Pi](https://pi.dev), [Goose](https://goose-docs.ai/), etc.). Install the CLI, then copy the skill folders:
 
 ```bash
-decant config
+uv tool install git+https://github.com/jswest/decant
+decant setup                                          # installs headless Chromium, prints status
+decant config --email you@example.com [--no-ollama]   # or plain `decant config` for prompts
+cp -r skills/decant skills/setup ~/.claude/skills/    # or your harness's skills dir
 ```
 
-This writes `~/.decant/config.yaml` and creates `~/.decant/cache/`.
-
-## Install the skill
-
-The agent-facing skill lives at [`skills/decant.md`](./skills/decant.md). Copy it into your harness's skills directory:
-
-```bash
-cp skills/decant.md ~/.claude/skills/decant.md
-```
-
-Works with any harness that reads Anthropic's Agent Skills format — Claude Code, [Pi](https://pi.dev), [Goose](https://goose-docs.ai/), etc. The skill teaches the agent when to reach for `decant` instead of a built-in fetch, how to invoke each mode (`extract` / `summary` / `both`), how to parse the JSON output, and how to recover from each error code.
-
-**Re-copy the skill after every `git pull`** — the skill contract changes pre-1.0. The CLI resolves through the installed package, so `uv tool install .` (or `--editable`) keeps `decant <subcommand>` in sync.
+`decant config` with no flags walks through the same settings interactively. Either way it writes `~/.decant/config.yaml` and creates `~/.decant/cache/`.
 
 ## Usage
 
@@ -184,7 +185,7 @@ The output schema:
 }
 ```
 
-Requires a Brave Search API key (set via `decant config` or the `BRAVE_SEARCH_API_KEY` env var). Without one, the command errors with `search_no_api_key`.
+Requires a Brave Search API key (set via `decant config --brave-key KEY` or the `BRAVE_SEARCH_API_KEY` env var). Without one, the command errors with `search_no_api_key`, and the skill tells the agent to find URLs with its own search tool instead.
 
 Search-specific flags:
 
@@ -256,14 +257,23 @@ decant version
 
 Emits `{"version": "...", "config_path": "...", "cache_dir": "..."}`.
 
+### Setup and status
+
+```bash
+decant setup
+```
+
+Installs headless Chromium (idempotent), test-launches it and prints a JSON status report: browser health, whether a config exists, whether Ollama is reachable and which models it has, and whether a Brave key is saved. Exits 1 if the browser won't launch; on Linux the report includes the `playwright install-deps` command that fixes missing system libraries.
+
 ## Configuration
 
-`~/.decant/config.yaml`:
+`decant config` writes `~/.decant/config.yaml`. With no flags it prompts; with any of `--email`, `--brave-key`, `--ollama-host`, `--model`, `--fast-model`, `--ollama/--no-ollama` or `--ttl-hours` it runs non-interactively, overlays just those values on the existing config and prints the result as JSON. Pass `''` to `--brave-key` or `--fast-model` to clear them.
 
 ```yaml
 contact_email: john@example.com         # required, embedded in User-Agent
 
 ollama:
+  enabled: true                          # false: --question runs fall back to extract mode (meta.summary_skipped)
   host: http://localhost:11434
   model: qwen3:32b
   fast_model: qwen3:8b                   # optional; when set, becomes the summary-mode default (use --accurate to opt out)
@@ -304,8 +314,11 @@ The User-Agent is not configurable. It is built from `contact_email` and the pac
 **Development**:
 
 ```bash
+git clone https://github.com/jswest/decant && cd decant
 uv sync --extra dev
-uv run pytest -q                              # ~70 tests, ~0.3s
+uv run playwright install chromium
+uv tool install --editable .                  # puts this checkout on PATH as `decant`
+uv run pytest -q                              # ~210 tests, ~2s
 DECANT_E2E=1 uv run pytest tests/test_fetch.py # adds the real-browser test
 ```
 

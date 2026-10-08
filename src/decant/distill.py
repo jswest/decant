@@ -84,6 +84,10 @@ class OllamaTimeoutError(Exception):
     """`/api/chat` exceeded the configured timeout."""
 
 
+class OllamaModelMissingError(Exception):
+    """Ollama is up but the requested model isn't pulled."""
+
+
 class OllamaBadJsonError(Exception):
     """Model returned non-JSON or schema-incompatible JSON after one retry."""
 
@@ -135,6 +139,8 @@ async def distill(
         except httpx.HTTPError as e:
             raise OllamaUnavailableError(str(e)) from e
 
+        if r.status_code == 404:
+            raise OllamaModelMissingError(f"model {model!r} not found on {host}")
         if r.status_code >= 400:
             raise OllamaUnavailableError(f"HTTP {r.status_code}: {r.text[:200]}")
 

@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from decant.fetch import (
+    BrowserMissingError,
     FetchFailedError,
     FetchResult,
     Fetcher,
@@ -138,6 +139,33 @@ async def test_route_handler_blocks_configured_resources():
 def test_fetcher_loads_readability_js():
     f = Fetcher(user_agent="x", blocked_resources=[])
     assert "function Readability" in f._readability_js
+
+
+@pytest.mark.asyncio
+async def test_launch_failure_raises_browser_missing(monkeypatch):
+    from playwright.async_api import Error as PlaywrightError
+
+    stopped = []
+
+    class _Chromium:
+        async def launch(self, **kw):
+            raise PlaywrightError("Executable doesn't exist at /nope/chrome")
+
+    class _PW:
+        chromium = _Chromium()
+
+        async def stop(self):
+            stopped.append(True)
+
+    class _Starter:
+        async def start(self):
+            return _PW()
+
+    monkeypatch.setattr("decant.fetch.async_playwright", lambda: _Starter())
+    with pytest.raises(BrowserMissingError, match="Executable doesn't exist"):
+        async with Fetcher(user_agent="x", blocked_resources=[]):
+            pass
+    assert stopped == [True]
 
 
 # --- End-to-end Playwright test (gated) --------------------------------------

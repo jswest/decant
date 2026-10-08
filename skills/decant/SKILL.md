@@ -14,13 +14,24 @@ the URL-fetch work locally (Playwright + content extraction + optional
 Ollama summarization) and returns a compact JSON payload, so you don't
 have to load the full HTML into your context window.
 
+## If decant isn't set up yet
+
+If a decant command fails with `command not found`, or returns
+`config_missing` or `browser_missing`, run the `/decant:setup` skill
+(the setup flow ships in the same plugin), then retry the original
+request. Don't ask the user to run anything themselves.
+
+If decant rejects a flag documented here (`No such option`), the CLI is
+older than this skill: run `uv tool upgrade decant` and retry once.
+
 ## When to use
 
 - **User gives you a URL** → use `decant url`. Documentation, articles,
   context for a coding task.
 - **User asks you to find, search, or research something** without
   naming a specific page → use `decant search` to triage candidate URLs,
-  then `decant url` on the ones worth reading.
+  then `decant url` on the ones worth reading. No Brave key configured?
+  See "Searching the web" for the fallback.
 
 Don't use it for:
 - File paths, local docs, or anything that isn't an `http`/`https` URL.
@@ -34,6 +45,11 @@ Always invoke via the Bash tool. Output is a JSON object on stdout
 (or a JSON array if multiple URLs). In batch mode, inspect each
 element's `code` field rather than relying solely on exit status —
 see the exit-code table under "Multiple URLs" below.
+
+**Set a 10-minute Bash timeout** (`timeout: 600000`) on any call with
+`--question` or more than one URL. Local LLM calls can take minutes on
+modest hardware, and the Bash tool's 2-minute default will kill decant
+mid-run.
 
 ### Just the clean markdown
 
@@ -58,6 +74,12 @@ local LLM. Read:
 Prefer summary mode when the user has a *specific* question. Prefer
 extract mode when they want the whole page or you'll be doing your own
 analysis.
+
+If the user turned off local-LLM summaries (no Ollama), decant quietly
+answers `--question` calls in extract mode instead: `.mode` is
+`"extract"`, `.extract.markdown` holds the page and
+`.meta.summary_skipped` is `"ollama_disabled"`. Answer the question
+from the markdown yourself.
 
 ### Terse mode — drop the verbatim quotes
 
@@ -175,9 +197,17 @@ Search-specific flags worth knowing:
 - `--country XX`, `--lang xx` — override defaults when the query is
   region/language-specific.
 
+**No Brave key?** If `decant search` returns `search_no_api_key`, don't
+stop. Use your built-in web search tool (e.g. WebSearch) to find
+candidate URLs, then read the best 2–4 with `decant url` as usual.
+Mention once per conversation that adding a Brave key
+(`decant config --brave-key KEY`, free tier at
+https://api.search.brave.com/) makes search cheaper. Don't nag after
+that.
+
 Search-specific errors:
-- `search_no_api_key` — no Brave key configured. Tell the user to run
-  `decant config` and add one, or set `BRAVE_SEARCH_API_KEY`.
+- `search_no_api_key` — no Brave key configured. Use the fallback
+  above.
 - `search_rate_limited` — wait the `details.retry_after` seconds and
   retry (Brave's free tier allows 1 req/sec).
 - `search_bad_query` — the query is too long, too many words, or empty.
@@ -230,10 +260,12 @@ Errors come back as JSON objects with a `code` field instead of a
 | `robots_disallowed` | Site blocks our UA. Tell the user; suggest they fetch it themselves if it's important. |
 | `fetch_failed` | Transient or hard fetch error. Show the message; retry once with `--no-cache` if it looks transient. |
 | `extract_empty` | Page rendered but no main content found (likely a JS-only app or a blocker page). Tell the user. |
-| `ollama_unavailable` / `ollama_timeout` | Local LLM is down or slow. If you only need the text, re-run without `--question` to get extract mode. |
+| `ollama_unavailable` / `ollama_timeout` | Local LLM is down or slow. Re-run without `--question` to get extract mode and answer from the markdown yourself — the page is already cached, so this is instant. If Ollama stays down, offer to turn summaries off with `decant config --no-ollama`. |
+| `ollama_model_missing` | Ollama is running but the configured model isn't downloaded. Tell the user the `ollama pull ...` command in the error (it's a multi-GB download), and fall back to extract mode for now. |
 | `ollama_bad_json` | Rare. Retry once; if it still fails, fall back to extract mode and reason yourself. |
-| `config_missing` | User hasn't set decant up. Tell them to run `decant config`. |
-| `config_missing_fast_model` | You passed `--fast` but the user hasn't configured `ollama.fast_model`. Either drop `--fast` (falls back to the accurate model) or tell them to set it via `decant config`. |
+| `config_missing` | decant isn't set up. Run the `/decant:setup` skill. |
+| `browser_missing` | Headless Chromium isn't installed or won't launch. Run `decant setup` (10-minute timeout), then retry. |
+| `config_missing_fast_model` | You passed `--fast` but the user hasn't configured `ollama.fast_model`. Drop `--fast` (falls back to the accurate model). |
 | `invalid_url` | The URL didn't parse or isn't http(s). Re-check what you sent. |
 
 ## Polite scraping — implications for you
@@ -266,3 +298,4 @@ Errors come back as JSON objects with a `code` field instead of a
     decant cache stats                            # inspect cache
     decant cache clear                            # wipe cache
     decant version                                # version + paths
+    decant setup                                  # install Chromium + status report

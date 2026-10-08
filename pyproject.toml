@@ -40,4 +40,4 @@ packages = ["src/decant"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-# Post-install: run `uv run playwright install chromium` once to fetch the headless browser.
+# Post-install: run `decant setup` once to fetch the headless browser.

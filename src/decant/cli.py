@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import platform
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -11,6 +13,7 @@ from urllib.parse import urlsplit
 
 import click
 import httpx
+from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
 from decant import __version__, cache as cache_mod
 from decant.config import (
@@ -19,17 +22,19 @@ from decant.config import (
     EMAIL_RE,
     Config,
     ConfigMissingError,
+    OllamaConfig,
     load_config,
     save_config,
 )
 from decant.distill import (
     OllamaBadJsonError,
+    OllamaModelMissingError,
     OllamaTimeoutError,
     OllamaUnavailableError,
     distill,
 )
 from decant.extract import ExtractEmptyError, extract as extract_html
-from decant.fetch import FetchFailedError, Fetcher
+from decant.fetch import BrowserMissingError, FetchFailedError, Fetcher
 from decant.models import ErrorCode
 from decant.robots import RobotsCache
 from decant.search import (
@@ -58,12 +63,45 @@ def main(ctx: click.Context, verbose: bool) -> None:
 
 
 @main.command("config")
-def config_cmd() -> None:
-    """Interactive first-run setup. Writes ~/.decant/config.yaml."""
+@click.option("--email", default=None, help="Contact email (embedded in the User-Agent).")
+@click.option("--brave-key", default=None, help="Brave Search API key. Pass '' to clear.")
+@click.option("--ollama-host", default=None, help="Ollama host URL.")
+@click.option("--model", default=None, help="Accurate-tier Ollama model.")
+@click.option("--fast-model", default=None, help="Fast-tier Ollama model. Pass '' to clear.")
+@click.option(
+    "--ollama/--no-ollama",
+    "ollama_enabled",
+    default=None,
+    help="Turn local-LLM summaries on or off.",
+)
+@click.option("--ttl-hours", type=int, default=None, help="Page cache TTL in hours.")
+def config_cmd(
+    email: str | None,
+    brave_key: str | None,
+    ollama_host: str | None,
+    model: str | None,
+    fast_model: str | None,
+    ollama_enabled: bool | None,
+    ttl_hours: int | None,
+) -> None:
+    """Write ~/.decant/config.yaml. Prompts interactively unless flags are passed."""
     try:
         existing = load_config()
     except ConfigMissingError:
         existing = None
+
+    flags = {
+        "email": email,
+        "brave_key": brave_key,
+        "ollama_host": ollama_host,
+        "model": model,
+        "fast_model": fast_model,
+        "ollama_enabled": ollama_enabled,
+        "ttl_hours": ttl_hours,
+    }
+    if any(v is not None for v in flags.values()):
+        _config_from_flags(existing, **flags)
+        return
 
     email = _prompt_email(existing.contact_email if existing else None)
     host = click.prompt(
@@ -117,6 +155,69 @@ def config_cmd() -> None:
         )
 
 
+def _config_from_flags(
+    existing: Config | None,
+    *,
+    email: str | None,
+    brave_key: str | None,
+    ollama_host: str | None,
+    model: str | None,
+    fast_model: str | None,
+    ollama_enabled: bool | None,
+    ttl_hours: int | None,
+) -> None:
+    """Non-interactive config: overlay the passed flags on the existing config."""
+    data = existing.model_dump() if existing else {}
+    if email is None and existing is None:
+        _emit_config_missing_and_exit(
+            "No config yet, so --email is required on the first `decant config` run."
+        )
+    if email is not None:
+        if not EMAIL_RE.match(email):
+            click.echo(
+                json.dumps(
+                    {
+                        "error": f"Not a plausible email: {email!r}",
+                        "code": ErrorCode.CONFIG_INVALID.value,
+                    }
+                )
+            )
+            sys.exit(1)
+        data["contact_email"] = email
+    ollama = data.setdefault("ollama", {})
+    if ollama_host is not None:
+        ollama["host"] = ollama_host
+    if model is not None:
+        ollama["model"] = model
+    if fast_model is not None:
+        ollama["fast_model"] = fast_model or None
+    if ollama_enabled is not None:
+        ollama["enabled"] = ollama_enabled
+    if ttl_hours is not None:
+        data.setdefault("cache", {})["ttl_hours"] = ttl_hours
+    if brave_key is not None:
+        data.setdefault("search", {})["brave_api_key"] = brave_key or None
+
+    cfg = Config.model_validate(data)
+    save_config(cfg)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    click.echo(
+        json.dumps(
+            {
+                "config_path": str(CONFIG_PATH),
+                "contact_email": cfg.contact_email,
+                "ollama": {
+                    "enabled": cfg.ollama.enabled,
+                    "host": cfg.ollama.host,
+                    "model": cfg.ollama.model,
+                    "fast_model": cfg.ollama.fast_model,
+                },
+                "brave_key": bool(cfg.search.brave_api_key),
+            }
+        )
+    )
+
+
 def _prompt_email(default: str | None) -> str:
     while True:
         email = click.prompt("Contact email", default=default)
@@ -147,6 +248,71 @@ def _list_ollama_models(host: str) -> list[str]:
         return [m["name"] for m in r.json().get("models", [])]
     except (httpx.HTTPError, ValueError, KeyError):
         return []
+
+
+# ---------------------------------------------------------------------------
+# decant setup
+# ---------------------------------------------------------------------------
+
+
+@main.command("setup")
+def setup_cmd() -> None:
+    """Install headless Chromium, then print a JSON status report."""
+    subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        check=True,
+        stdout=sys.stderr,
+    )
+    browser_error = _check_browser()
+
+    try:
+        cfg = load_config()
+    except ConfigMissingError:
+        cfg = None
+    ollama_cfg = cfg.ollama if cfg else OllamaConfig()
+    models = _list_ollama_models(ollama_cfg.host)
+
+    browser: dict = {"ok": browser_error is None}
+    if browser_error:
+        browser["error"] = browser_error
+        if platform.system() == "Linux":
+            browser["fix"] = (
+                f"sudo {sys.executable} -m playwright install-deps chromium"
+            )
+    click.echo(
+        json.dumps(
+            {
+                "version": __version__,
+                "platform": platform.system(),
+                "browser": browser,
+                "config": "ok" if cfg else "missing",
+                "config_path": str(CONFIG_PATH),
+                "contact_email": cfg.contact_email if cfg else None,
+                "ollama": {
+                    "enabled": ollama_cfg.enabled,
+                    "host": ollama_cfg.host,
+                    "reachable": bool(models),
+                    "models": models,
+                    "model": ollama_cfg.model,
+                    "fast_model": ollama_cfg.fast_model,
+                },
+                "brave_key": bool(cfg and cfg.search.brave_api_key),
+            },
+            indent=2,
+        )
+    )
+    if browser_error:
+        sys.exit(1)
+
+
+def _check_browser() -> str | None:
+    """Launch and close headless Chromium; return the error message on failure."""
+    try:
+        with sync_playwright() as pw:
+            pw.chromium.launch(headless=True).close()
+    except PlaywrightError as e:
+        return str(e)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +394,11 @@ def search_cmd(
             json.dumps(
                 {
                     "query": body,
-                    "error": "No Brave API key. Set it via `decant config` or BRAVE_SEARCH_API_KEY.",
+                    "error": (
+                        "No Brave API key. Set it with `decant config --brave-key KEY` "
+                        "or BRAVE_SEARCH_API_KEY, or find URLs another way and "
+                        "read them with `decant url`."
+                    ),
                     "code": ErrorCode.SEARCH_NO_API_KEY.value,
                 }
             )
@@ -391,6 +561,9 @@ def url_cmd(
     resolved_mode = _resolve_mode(mode, question)
     if terse and resolved_mode == "extract":
         raise click.UsageError("--terse requires --question or --mode summary|both")
+    summary_skipped = None
+    if resolved_mode != "extract" and not cfg.ollama.enabled:
+        resolved_mode, terse, summary_skipped = "extract", False, "ollama_disabled"
 
     opts = _RunOpts(
         cfg=cfg,
@@ -403,11 +576,22 @@ def url_cmd(
         no_cache=no_cache,
         verbose=ctx.obj.get("verbose", False),
         ua=build_user_agent(cfg.contact_email),
+        summary_skipped=summary_skipped,
     )
 
     is_batch = len(urls) > 1
     batch_start = time.monotonic()
-    results = asyncio.run(_process_all(opts, urls))
+    try:
+        results = asyncio.run(_process_all(opts, urls))
+    except BrowserMissingError as e:
+        results = [
+            _error(
+                u,
+                ErrorCode.BROWSER_MISSING,
+                f"Chromium failed to launch. Run `decant setup` to install it. ({e})",
+            )
+            for u in urls
+        ]
     elapsed_s = time.monotonic() - batch_start
 
     payload = results if is_batch else results[0]
@@ -459,11 +643,16 @@ def _resolve_model(
     return cfg.ollama.model, "accurate"
 
 
-def _emit_config_missing_and_exit() -> None:
+_SETUP_HINT = (
+    "Run the /decant:setup skill, or `decant config --email you@example.com`."
+)
+
+
+def _emit_config_missing_and_exit(message: str | None = None) -> None:
     click.echo(
         json.dumps(
             {
-                "error": "No ~/.decant/config.yaml. Run `decant config` first.",
+                "error": message or f"No ~/.decant/config.yaml. {_SETUP_HINT}",
                 "code": ErrorCode.CONFIG_MISSING.value,
                 "details": {"config_path": str(CONFIG_PATH)},
             }
@@ -477,8 +666,8 @@ def _emit_config_missing_fast_model_and_exit() -> None:
         json.dumps(
             {
                 "error": (
-                    "--fast requires ollama.fast_model to be set. "
-                    "Run `decant config` to set it, or pass --model X explicitly."
+                    "--fast requires ollama.fast_model to be set. Run "
+                    "`decant config --fast-model MODEL`, or pass --model X explicitly."
                 ),
                 "code": ErrorCode.CONFIG_MISSING_FAST_MODEL.value,
             }
@@ -501,6 +690,7 @@ class _RunOpts:
     no_cache: bool
     verbose: bool
     ua: str
+    summary_skipped: str | None = None
 
 
 async def _process_all(opts: _RunOpts, urls: tuple[str, ...]) -> list[dict]:
@@ -540,6 +730,8 @@ async def _process_one(
     if not opts.no_cache:
         hit = cache_mod.read(key, cfg.cache.ttl_hours, CACHE_DIR)
         if hit is not None:
+            if opts.summary_skipped:
+                hit["meta"]["summary_skipped"] = opts.summary_skipped
             return hit
 
     # 3. Robots.
@@ -576,32 +768,6 @@ async def _process_one(
             err=True,
         )
 
-    # 6. Distill (only when mode includes summary).
-    summary = None
-    ollama_ms: int | None = None
-    truncated = False
-    if mode in ("summary", "both"):
-        try:
-            result, ollama_ms, truncated = await distill(
-                ollama_client,
-                cfg.ollama.host,
-                model,
-                question or "",
-                markdown,
-                cfg.ollama.request_timeout_s,
-                terse=opts.terse,
-            )
-        except OllamaUnavailableError as e:
-            return _error(url, ErrorCode.OLLAMA_UNAVAILABLE, str(e))
-        except OllamaTimeoutError as e:
-            return _error(url, ErrorCode.OLLAMA_TIMEOUT, str(e))
-        except OllamaBadJsonError as e:
-            return _error(url, ErrorCode.OLLAMA_BAD_JSON, str(e))
-        summary = result.model_dump()
-        if opts.verbose:
-            click.echo(f"  ollama {ollama_ms}ms", err=True)
-
-    # 7. Compose result.
     extract_block: dict = {
         "extractor": extractor_name,
         "char_count": len(markdown),
@@ -624,13 +790,6 @@ async def _process_one(
         "model": model,
         "soft_404": soft_404_meta,
     }
-    if ollama_ms is not None:
-        meta["ollama_ms"] = ollama_ms
-    if mode in ("summary", "both"):
-        meta["tier"] = opts.tier
-        meta["terse"] = opts.terse
-    if truncated:
-        meta["truncated"] = True
 
     result_payload: dict = {
         "url": url,
@@ -641,6 +800,58 @@ async def _process_one(
         "extract": extract_block,
         "meta": meta,
     }
+
+    # Warm the extract cache before distilling, so an Ollama failure doesn't
+    # throw away the fetch: a follow-up `--mode extract` call is a cache hit.
+    # Extract-mode keys ignore question + model (see cache.cache_key).
+    if not opts.no_cache and mode != "extract":
+        extract_payload = _extract_projection(
+            {**result_payload, "extract": {**extract_block, "markdown": markdown}}
+        )
+        cache_mod.write(
+            cache_mod.cache_key(url, "extract", None, ""), extract_payload, CACHE_DIR
+        )
+
+    # 6. Distill (only when mode includes summary).
+    summary = None
+    ollama_ms: int | None = None
+    truncated = False
+    if mode in ("summary", "both"):
+        try:
+            result, ollama_ms, truncated = await distill(
+                ollama_client,
+                cfg.ollama.host,
+                model,
+                question or "",
+                markdown,
+                cfg.ollama.request_timeout_s,
+                terse=opts.terse,
+            )
+        except OllamaUnavailableError as e:
+            return _error(url, ErrorCode.OLLAMA_UNAVAILABLE, str(e))
+        except OllamaModelMissingError as e:
+            return _error(
+                url,
+                ErrorCode.OLLAMA_MODEL_MISSING,
+                f"{e}. Run `ollama pull {model}`.",
+                details={"model": model},
+            )
+        except OllamaTimeoutError as e:
+            return _error(url, ErrorCode.OLLAMA_TIMEOUT, str(e))
+        except OllamaBadJsonError as e:
+            return _error(url, ErrorCode.OLLAMA_BAD_JSON, str(e))
+        summary = result.model_dump()
+        if opts.verbose:
+            click.echo(f"  ollama {ollama_ms}ms", err=True)
+
+    # 7. Compose result.
+    if ollama_ms is not None:
+        meta["ollama_ms"] = ollama_ms
+    if mode in ("summary", "both"):
+        meta["tier"] = opts.tier
+        meta["terse"] = opts.terse
+    if truncated:
+        meta["truncated"] = True
     if summary is not None:
         result_payload["summary"] = summary
 
@@ -650,14 +861,15 @@ async def _process_one(
     if not opts.no_cache:
         cache_mod.write(key, result_payload, CACHE_DIR)
         if mode == "both":
-            # Extract-mode keys ignore question + model (see cache.cache_key),
-            # so we pass placeholders to make the intent explicit.
-            extract_key = cache_mod.cache_key(url, "extract", None, "")
             summary_key = cache_mod.cache_key(
                 url, "summary", question, model, opts.terse
             )
-            cache_mod.write(extract_key, _extract_projection(result_payload), CACHE_DIR)
             cache_mod.write(summary_key, _summary_projection(result_payload), CACHE_DIR)
+
+    # Per-run annotation, added after the cache write so a later plain
+    # extract call doesn't inherit it.
+    if opts.summary_skipped:
+        meta["summary_skipped"] = opts.summary_skipped
 
     return result_payload
 

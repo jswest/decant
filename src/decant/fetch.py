@@ -32,6 +32,10 @@ class FetchFailedError(Exception):
     """Playwright threw, navigation hit a hard error, or response was 4xx/5xx."""
 
 
+class BrowserMissingError(Exception):
+    """Chromium couldn't launch — usually because `decant setup` hasn't run."""
+
+
 class _HTTPStatus(Exception):
     """Internal sentinel for status-code-driven retry decisions."""
 
@@ -85,7 +89,11 @@ class Fetcher:
 
     async def __aenter__(self) -> Fetcher:
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=True)
+        try:
+            self._browser = await self._pw.chromium.launch(headless=True)
+        except PlaywrightError as e:
+            await self._pw.stop()
+            raise BrowserMissingError(str(e).splitlines()[0]) from e
         # bypass_csp: strict-CSP sites (e.g. SPA dashboards) would otherwise
         # refuse Readability.js injection via add_script_tag.
         self._context = await self._browser.new_context(

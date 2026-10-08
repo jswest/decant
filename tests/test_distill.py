@@ -7,6 +7,7 @@ import pytest
 
 from decant.distill import (
     OllamaBadJsonError,
+    OllamaModelMissingError,
     OllamaTimeoutError,
     OllamaUnavailableError,
     build_prompt,
@@ -121,6 +122,16 @@ async def test_distill_unavailable_on_4xx():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(OllamaUnavailableError):
+            await distill(client, "http://x", "q", "Q?", "md", timeout_s=10)
+
+
+@pytest.mark.asyncio
+async def test_distill_model_missing_on_404():
+    def handler(req):
+        return httpx.Response(404, json={"error": "model 'q' not found"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(OllamaModelMissingError):
             await distill(client, "http://x", "q", "Q?", "md", timeout_s=10)
 
 

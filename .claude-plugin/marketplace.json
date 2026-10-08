@@ -1,0 +1,16 @@
+{
+  "name": "decant",
+  "owner": {
+    "name": "John West"
+  },
+  "metadata": {
+    "description": "decant: clarifying the web for CLI agents"
+  },
+  "plugins": [
+    {
+      "name": "decant",
+      "source": "./",
+      "description": "Fetch and search the web through the local decant CLI: clean markdown and local-LLM findings in compact JSON instead of full pages."
+    }
+  ]
+}
